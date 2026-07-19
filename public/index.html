@@ -96,9 +96,28 @@
         <div id="filterError" class="text-red-400 text-sm hidden"></div>
       </section>
 
+      <!-- Auto-Extract from Screenshot -->
+      <section class="bg-slate-800 rounded-2xl p-4 border border-brand-600/40">
+        <h2 class="font-semibold mb-1">🤖 Auto-Extract from Screenshot</h2>
+        <p class="text-xs text-slate-400 mb-3">Upload a photo/screenshot of the transaction. We read date, time, sender, receiver & amount automatically — then you confirm.</p>
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="flex-1 min-w-[220px]">
+            <input id="ocrFile" type="file" accept="image/*" capture="environment" class="w-full text-sm text-slate-300" />
+          </div>
+          <button id="ocrBtn" type="button" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">⚡ Scan & Fill</button>
+        </div>
+        <div id="ocrStatus" class="text-sm text-slate-400 mt-2 hidden"></div>
+        <div id="ocrRaw" class="hidden mt-2">
+          <details class="text-xs text-slate-500">
+            <summary class="cursor-pointer">Show extracted raw text</summary>
+            <pre id="ocrRawText" class="mt-1 whitespace-pre-wrap bg-slate-900 rounded p-2"></pre>
+          </details>
+        </div>
+      </section>
+
       <!-- New Transaction Form -->
       <section class="bg-slate-800 rounded-2xl p-4">
-        <h2 class="font-semibold mb-3">📝 Log New Transaction</h2>
+        <h2 class="font-semibold mb-3">📝 Log New Transaction <span class="text-xs text-slate-500">(edit auto-filled fields, then save)</span></h2>
         <form id="txnForm" class="grid grid-cols-1 md:grid-cols-2 gap-3">
           <input id="ref" placeholder="Reference Number *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
           <div class="flex gap-2">

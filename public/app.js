@@ -203,6 +203,46 @@ async function fileToBase64(file) {
   });
 }
 
+// ---------- OCR auto-extract flow ----------
+el("ocrBtn").addEventListener("click", async () => {
+  const file = el("ocrFile").files[0];
+  const status = el("ocrStatus");
+  if (!file) { status.textContent = "Please choose an image first."; status.classList.remove("hidden"); return; }
+  status.textContent = "⏳ Reading image (this can take a few seconds)…";
+  status.className = "text-sm text-slate-400 mt-2";
+  status.classList.remove("hidden");
+  el("ocrRaw").classList.add("hidden");
+  try {
+    const b64 = await fileToBase64(file);
+    const data = await api("/api/extract", "POST", { image_base64: b64 });
+    if (data.error) {
+      status.textContent = "❌ " + data.error;
+      status.className = "text-sm text-red-400 mt-2";
+      return;
+    }
+    // Pre-fill the transaction form
+    if (data.date) el("txnDate").value = data.date;
+    if (data.time) el("txnTime").value = data.time.length <= 5 ? data.time : data.time.slice(0, 5);
+    if (data.sender_name) el("sender").value = data.sender_name;
+    if (data.receiver_name) el("receiver").value = data.receiver_name;
+    if (data.amount) el("amount").value = data.amount;
+    if (!el("purpose").value) el("purpose").value = "Auto-extracted from screenshot";
+    // auto reference if empty
+    if (!el("ref").value) el("ref").value = "AUTO-" + Date.now().toString().slice(-6);
+
+    status.innerHTML = "✅ Filled! Review the fields below and press <b>Save Transaction</b>.";
+    status.className = "text-sm text-emerald-400 mt-2";
+    if (data.raw_text) {
+      el("ocrRaw").classList.remove("hidden");
+      el("ocrRawText").textContent = data.raw_text;
+    }
+    toast("Fields auto-filled — review & save");
+  } catch (err) {
+    status.textContent = "❌ Extraction failed: " + err.message;
+    status.className = "text-sm text-red-400 mt-2";
+  }
+});
+
 el("txnForm").addEventListener("submit", async e => {
   e.preventDefault();
   showError("txnError", "");

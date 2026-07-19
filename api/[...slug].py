@@ -298,6 +298,128 @@ def handle_transactions_post(environ):
     return _json(200, {"ok": True, "transaction": row})
 
 
+# ---------------------------------------------------------------- OCR extraction
+
+
+def _load_reader():
+    """Lazily import and build the EasyOCR reader (heavy; only on /api/extract)."""
+    from easyocr import Reader
+    # English + Urdu/Arabic script for regional bank apps.
+    reader = Reader(["en", "ur"], gpu=False, verbose=False)
+    return reader
+
+
+def _extract_fields(text):
+    """Heuristically parse transaction fields out of OCR text lines."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    lower = "\n".join(lines).lower()
+
+    result = {
+        "date": "",
+        "time": "",
+        "sender_name": "",
+        "receiver_name": "",
+        "amount": "",
+        "raw_text": text,
+    }
+
+    # --- Amount: look for currency symbols or 'Rs'/'PKR' followed by a number ---
+    amount_patterns = [
+        r"(?:rs\.?|pkr|₨|r\.s\.?)\s*([0-9][0-9,]{0,15}(?:\.[0-9]{1,2})?)",
+        r"([0-9][0-9,]{0,15}(?:\.[0-9]{1,2})?)\s*(?:rs|pkr|₨)",
+        r"(?:amount|paid|sent|transferred|total)[:\s]*([0-9][0-9,]{0,15}(?:\.[0-9]{1,2})?)",
+        r"\b([0-9]{2,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)\b",
+    ]
+    for pat in amount_patterns:
+        m = re.search(pat, lower)
+        if m:
+            val = m.group(1).replace(",", "")
+            try:
+                float(val)
+                result["amount"] = val
+                break
+            except ValueError:
+                continue
+
+    # --- Date: dd/mm/yyyy, dd-mm-yyyy, yyyy-mm-dd, or "Jul 12 2026" ---
+    date_patterns = [
+        r"\b(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\b",
+        r"\b(\d{4}[/\-]\d{1,2}[/\-]\d{1,2})\b",
+        r"\b([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b",
+        r"\b(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\b",
+    ]
+    for pat in date_patterns:
+        m = re.search(pat, text)
+        if m:
+            result["date"] = _normalize_date(m.group(1))
+            break
+
+    # --- Time: hh:mm with optional am/pm ---
+    tm = re.search(r"\b(\d{1,2}:\d{2}(?:\s*[APap][Mm])?)\b", text)
+    if tm:
+        result["time"] = tm.group(1).upper().replace(" ", "")
+
+    # --- Sender / Receiver via keywords ---
+    sender_kw = ["from", "sender", "paid by", "debited from", "account", "payer"]
+    receiver_kw = ["to", "receiver", "beneficiary", "paid to", "credited to", "transferred to", "sent to"]
+
+    def _grab_after(keywords):
+        for kw in keywords:
+            m = re.search(rf"{kw}\s*[:\-]?\s*([A-Za-z][A-Za-z .'&]{1,40})", lower)
+            if m:
+                return m.group(1).strip().title()
+        return ""
+
+    result["sender_name"] = _grab_after(sender_kw)
+    result["receiver_name"] = _grab_after(receiver_kw)
+
+    return result
+
+
+def _normalize_date(raw):
+    raw = raw.strip()
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    # Month name formats
+    for fmt in ("%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(raw.replace(",", ""), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return raw
+
+
+def handle_extract(environ):
+    """Accept a Base64 image, run EasyOCR, return extracted transaction fields."""
+    data = _read_body(environ)
+    b64 = data.get("image_base64", "")
+    if not b64:
+        return _json(400, {"error": "image_base64 is required"})
+    try:
+        if "," in b64:
+            b64 = b64.split(",", 1)[1]
+        img_bytes = base64.b64decode(b64)
+    except Exception:  # noqa: BLE001
+        return _json(400, {"error": "Invalid Base64 image"})
+
+    tmp = "/tmp/spendpulse_ocr.png"
+    with open(tmp, "wb") as f:
+        f.write(img_bytes)
+
+    try:
+        reader = _load_reader()
+        ocr = reader.readtext(tmp, detail=0, paragraph=False)
+        text = "\n".join(str(x) for x in ocr)
+    except Exception as e:  # noqa: BLE001
+        return _json(500, {"error": f"OCR failed: {e}", "hint": "EasyOCR model may exceed Vercel function size; run locally or use a smaller runtime."})
+
+    fields = _extract_fields(text)
+    return _json(200, fields)
+
+
 # ---------------------------------------------------------------- dispatcher
 
 
@@ -328,6 +450,7 @@ def app(environ, start_response):
         "/api/transactions": (
             handle_transactions_get if method == "GET" else handle_transactions_post
         ),
+        "/api/extract": handle_extract,
     }
 
     if path in route_map:

@@ -16,7 +16,7 @@ from datetime import date, datetime
 from urllib.parse import urlparse
 
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 
 USERS_COLUMNS = ["username", "password", "role"]
 TRANSACTIONS_COLUMNS = [
@@ -98,8 +98,10 @@ def _credentials():
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets",
     ]
-    return ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
+    creds = ServiceAccountCredentials.from_service_account_info(info, scopes=scope)
+    return creds
 
 
 def _client():

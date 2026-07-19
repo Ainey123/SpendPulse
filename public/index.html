@@ -99,7 +99,7 @@
       <!-- Auto-Extract from Screenshot -->
       <section class="bg-slate-800 rounded-2xl p-4 border border-brand-600/40">
         <h2 class="font-semibold mb-1">🤖 Auto-Extract from Screenshot</h2>
-        <p class="text-xs text-slate-400 mb-3">Upload a photo/screenshot of the transaction. Google Vision reads date, time, sender, receiver & amount automatically — then you confirm.</p>
+        <p class="text-xs text-slate-400 mb-3">Upload a photo/screenshot of the transaction. An AI vision model reads the sender, receiver, account numbers, exact date, time & amount — then you review and confirm.</p>
         <div class="flex flex-wrap items-end gap-3">
           <div class="flex-1 min-w-[220px]">
             <input id="ocrFile" type="file" accept="image/*" capture="environment" class="w-full text-sm text-slate-300" />
@@ -125,8 +125,13 @@
             <input id="txnTime" type="time" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
           </div>
           <input id="sender" placeholder="Sender Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="senderAccount" placeholder="Sender Account / Phone" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
           <input id="receiver" placeholder="Receiver Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="amount" type="number" step="0.01" min="0" placeholder="Amount *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="receiverAccount" placeholder="Receiver Account / Phone / IBAN" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <div class="flex gap-2">
+            <input id="amount" type="number" step="0.01" min="0" placeholder="Amount *" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            <input id="currency" placeholder="PKR" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          </div>
           <select id="txnType" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
             <option>Bank Transfer</option><option>Mobile Wallet</option><option>Cash Deposit</option>
             <option>Cheque</option><option>Online Payment</option><option>ATM Withdrawal</option><option>Other</option>

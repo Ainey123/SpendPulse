@@ -20,8 +20,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 USERS_COLUMNS = ["username", "password", "role"]
 TRANSACTIONS_COLUMNS = [
-    "reference_number", "date", "time", "amount", "sender_name",
-    "receiver_name", "purpose", "transaction_type", "receipt_base64", "logged_by",
+    "reference_number", "date", "time", "amount", "currency", "sender_name",
+    "sender_account", "receiver_name", "receiver_account", "purpose",
+    "transaction_type", "receipt_base64", "logged_by",
 ]
 
 # ---------------------------------------------------------------- helpers
@@ -309,8 +310,11 @@ def handle_transactions_post(environ):
         "date": str(data.get("date")).strip(),
         "time": str(data.get("time")).strip(),
         "amount": amount,
+        "currency": str(data.get("currency") or "PKR").strip(),
         "sender_name": str(data.get("sender_name")).strip(),
+        "sender_account": str(data.get("sender_account")).strip(),
         "receiver_name": str(data.get("receiver_name")).strip(),
+        "receiver_account": str(data.get("receiver_account")).strip(),
         "purpose": str(data.get("purpose")).strip(),
         "transaction_type": str(data.get("transaction_type")).strip(),
         "receipt_base64": receipt,
@@ -324,7 +328,7 @@ def handle_transactions_post(environ):
 
 
 def _vision_client():
-    """Build a Google Cloud Vision client from the service-account credentials."""
+    """Build a Google Cloud Vision client (used only as OCR text fallback)."""
     from google.cloud import vision
 
     raw = os.environ.get("GOOGLE_CREDENTIALS", "")
@@ -332,6 +336,114 @@ def _vision_client():
         raise RuntimeError("GOOGLE_CREDENTIALS environment variable is not set.")
     info = json.loads(raw)
     return vision.ImageAnnotatorClient.from_service_account_info(info)
+
+
+# ---- LLM vision extraction (accurate structured fields) ----
+
+LLM_PROMPT = (
+    "You are parsing a bank/EasyPaisa/JazzCash/WhatsApp transaction screenshot. "
+    "Return ONLY a JSON object with these exact keys (use empty string if not found):\n"
+    "{\n"
+    '  "sender_name": string,      // person or account who SENT the money\n'
+    '  "receiver_name": string,    // person or account who RECEIVED the money\n'
+    '  "sender_account": string,   // sender account/phone number if shown\n'
+    '  "receiver_account": string, // receiver account/phone/IBAN if shown\n'
+    '  "amount": string,           // numeric amount only, no currency symbol\n'
+    '  "currency": string,         // e.g. PKR, USD\n'
+    '  "date": string,             // ISO format YYYY-MM-DD\n'
+    '  "time": string,             // 24h HH:MM\n'
+    '  "purpose": string,          // what the payment was for, if stated\n'
+    '  "transaction_type": string  // e.g. Bank Transfer, Mobile Wallet, Cash\n'
+    "}\n"
+    "Be precise with names and account numbers exactly as written. Today is "
+    + datetime.now().strftime("%Y-%m-%d") + "."
+)
+
+
+def _llm_extract(img_b64_clean, raw_text=""):
+    """Call an LLM vision provider and return a normalized fields dict.
+
+    Provider is chosen by VISION_PROVIDER env (gemini|openai). Falls back to
+    the regex extractor when no API key is configured.
+    """
+    provider = (os.environ.get("VISION_PROVIDER") or "gemini").lower()
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+
+    if not api_key:
+        # No LLM key: degrade to regex heuristics on whatever OCR text we have.
+        return _extract_fields(raw_text)
+
+    try:
+        if provider == "openai":
+            return _openai_vision(img_b64_clean, api_key)
+        return _gemini_vision(img_b64_clean, api_key)
+    except Exception as e:  # noqa: BLE001
+        # If the LLM call fails, still try regex on the OCR text we may have.
+        if raw_text:
+            return _extract_fields(raw_text)
+        raise RuntimeError(f"LLM vision extraction failed: {e}")
+
+
+def _gemini_vision(img_b64_clean, api_key):
+    import google.generativeai as genai
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    resp = model.generate_content(
+        [
+            LLM_PROMPT,
+            {"mime_type": "image/png", "data": img_b64_clean},
+        ]
+    )
+    return _parse_llm_json(resp.text)
+
+
+def _openai_vision(img_b64_clean, api_key):
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": LLM_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64_clean}"}},
+                ],
+            }
+        ],
+        max_tokens=800,
+    )
+    return _parse_llm_json(resp.choices[0].message.content)
+
+
+def _parse_llm_json(text):
+    """Extract the first JSON object from an LLM response and normalize it."""
+    text = text.strip()
+    # Strip code fences if present.
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.lower().startswith("json"):
+            text = text[4:]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1:
+        return _extract_fields("")
+    obj = json.loads(text[start:end + 1])
+    result = {
+        "sender_name": str(obj.get("sender_name", "") or "").strip(),
+        "receiver_name": str(obj.get("receiver_name", "") or "").strip(),
+        "sender_account": str(obj.get("sender_account", "") or "").strip(),
+        "receiver_account": str(obj.get("receiver_account", "") or "").strip(),
+        "amount": str(obj.get("amount", "") or "").strip(),
+        "currency": str(obj.get("currency", "") or "").strip(),
+        "date": _normalize_date(str(obj.get("date", "") or "").strip()),
+        "time": str(obj.get("time", "") or "").strip()[:5],
+        "purpose": str(obj.get("purpose", "") or "").strip(),
+        "transaction_type": str(obj.get("transaction_type", "") or "").strip(),
+    }
+    return result
 
 
 def _extract_fields(text):
@@ -432,7 +544,7 @@ def _normalize_date(raw):
 
 
 def handle_extract(environ):
-    """Accept a Base64 image, run EasyOCR, return extracted transaction fields."""
+    """Accept a Base64 image, run LLM vision extraction, return structured fields."""
     data = _read_body(environ)
     b64 = data.get("image_base64", "")
     if not b64:
@@ -441,28 +553,34 @@ def handle_extract(environ):
         if "," in b64:
             b64 = b64.split(",", 1)[1]
         img_bytes = base64.b64decode(b64)
+        img_b64_clean = base64.b64encode(img_bytes).decode("ascii")
     except Exception:  # noqa: BLE001
         return _json(400, {"error": "Invalid Base64 image"})
 
-    tmp = "/tmp/spendpulse_ocr.png"
-    with open(tmp, "wb") as f:
-        f.write(img_bytes)
+    # Optional: gather OCR text up front (used only as regex fallback).
+    raw_text = ""
+    if os.environ.get("GOOGLE_CREDENTIALS"):
+        try:
+            client = _vision_client()
+            response = client.text_detection(image={"content": img_bytes})
+            if response.text_annotations:
+                raw_text = response.text_annotations[0].description
+        except Exception:  # noqa: BLE001
+            raw_text = ""
 
     try:
-        client = _vision_client()
-        image = {"content": img_bytes}
-        response = client.text_detection(image=image)
-        annotations = response.text_annotations
-        text = annotations[0].description if annotations else ""
-        if not text:
-            return _json(200, _extract_fields(""))
+        fields = _llm_extract(img_b64_clean, raw_text)
     except Exception as e:  # noqa: BLE001
-        return _json(500, {
-            "error": f"OCR failed: {e}",
-            "hint": "Enable the Cloud Vision API on your GCP project and ensure GOOGLE_CREDENTIALS has access.",
-        })
+        if raw_text:
+            fields = _extract_fields(raw_text)
+        else:
+            return _json(500, {
+                "error": f"Extraction failed: {e}",
+                "hint": "Set VISION_PROVIDER + GEMINI_API_KEY (or OPENAI_API_KEY).",
+            })
 
-    fields = _extract_fields(text)
+    # Keep the raw OCR text for transparency in the UI.
+    fields["raw_text"] = raw_text
     return _json(200, fields)
 
 

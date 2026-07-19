@@ -15,8 +15,19 @@
 #   using "Editor" access.
 #
 # GOOGLE_CREDENTIALS
-#   The full JSON of a Google service account, WITHIN a TOML wrapper so it can
-#   be pasted as a single env value. Example (paste the whole block):
+#   The full JSON of a Google service account. Used for Google Sheets access
+#   AND as an optional OCR-text fallback. Paste the whole JSON block:
+#
+# VISION_PROVIDER  (optional, defaults to "gemini")
+#   "gemini" or "openai"
+# GEMINI_API_KEY   (required if VISION_PROVIDER=gemini)
+#   Google AI Studio API key (https://aistudio.google.com/apikey)
+# OPENAI_API_KEY   (required if VISION_PROVIDER=openai)
+#   OpenAI API key (https://platform.openai.com/api-keys)
+#
+# The LLM reads the screenshot and returns accurate structured fields
+# (sender, receiver, account numbers, date, time, amount, purpose). Without a
+# key, the app falls back to regex heuristics on Cloud Vision OCR text.
 #
 #   GOOGLE_CREDENTIALS = """{
 #     "type": "service_account",

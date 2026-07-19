@@ -158,7 +158,7 @@ window.showReceipt = function (b64) {
 // ---------- CSV export ----------
 function downloadCSV() {
   const rows = window.__filtered || [];
-  const cols = ["reference_number","date","time","amount","sender_name","receiver_name","purpose","transaction_type","receipt_base64","logged_by"];
+  const cols = ["reference_number","date","time","amount","currency","sender_name","sender_account","receiver_name","receiver_account","purpose","transaction_type","receipt_base64","logged_by"];
   const head = cols.join(",");
   const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const lines = rows.map(r => cols.map(c => esc(r[c])).join(","));
@@ -225,18 +225,25 @@ el("ocrBtn").addEventListener("click", async () => {
     const b64 = await fileToBase64(file);
     const data = await api("/api/extract", "POST", { image_base64: b64 });
     if (data.error) {
-      status.innerHTML = "❌ OCR failed: " + data.error +
-        "<br><span class='text-xs'>Enable the <b>Cloud Vision API</b> on your GCP project and ensure GOOGLE_CREDENTIALS has access.</span>";
+      status.innerHTML = "❌ Extraction failed: " + data.error +
+        "<br><span class='text-xs'>Set <b>VISION_PROVIDER</b> + <b>GEMINI_API_KEY</b> (or OPENAI_API_KEY) in Vercel env vars.</span>";
       status.className = "text-sm text-red-400 mt-2";
       return;
     }
-    // Pre-fill the transaction form
+    // Pre-fill the transaction form (LLM returns accurate structured fields)
     if (data.date) el("txnDate").value = data.date;
-    if (data.time) el("txnTime").value = data.time.length <= 5 ? data.time : data.time.slice(0, 5);
+    if (data.time) el("txnTime").value = (data.time || "").length <= 5 ? data.time : data.time.slice(0, 5);
     if (data.sender_name) el("sender").value = data.sender_name;
+    if (data.sender_account) el("senderAccount").value = data.sender_account;
     if (data.receiver_name) el("receiver").value = data.receiver_name;
+    if (data.receiver_account) el("receiverAccount").value = data.receiver_account;
     if (data.amount) el("amount").value = data.amount;
-    if (!el("purpose").value) el("purpose").value = "Auto-extracted from screenshot";
+    if (data.currency) el("currency").value = data.currency;
+    if (!el("purpose").value) el("purpose").value = data.purpose || "Auto-extracted from screenshot";
+    if (!el("txnType").value && data.transaction_type) {
+      const opt = [...el("txnType").options].find(o => o.value.toLowerCase() === data.transaction_type.toLowerCase());
+      if (opt) el("txnType").value = opt.value;
+    }
     // auto reference if empty
     if (!el("ref").value) el("ref").value = "AUTO-" + Date.now().toString().slice(-6);
 
@@ -267,8 +274,11 @@ el("txnForm").addEventListener("submit", async e => {
     date: el("txnDate").value,
     time: el("txnTime").value,
     amount: el("amount").value,
+    currency: el("currency").value.trim() || "PKR",
     sender_name: el("sender").value.trim(),
+    sender_account: el("senderAccount").value.trim(),
     receiver_name: el("receiver").value.trim(),
+    receiver_account: el("receiverAccount").value.trim(),
     purpose: el("purpose").value.trim(),
     transaction_type: el("txnType").value,
     receipt_base64: b64,

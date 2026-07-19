@@ -370,8 +370,11 @@ def _llm_extract(img_b64_clean, raw_text=""):
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
-        # No LLM key: degrade to regex heuristics on whatever OCR text we have.
-        return _extract_fields(raw_text)
+        # No LLM key configured: don't pretend. Tell the user clearly.
+        raise RuntimeError(
+            "No vision API key set. Add GEMINI_API_KEY (or OPENAI_API_KEY) in "
+            "Vercel env vars so the screenshot can be read automatically."
+        )
 
     try:
         if provider == "openai":

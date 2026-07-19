@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Secrets — NEVER commit real credentials
+.streamlit/secrets.toml
+
+# Vercel build
+.vercel
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+receipts/

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
+  <title>SpendPulse — Financial Ledger</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { brand: { 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' } } } }
+    };
+  </script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .fade { animation: fade .25s ease; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <!-- ================= LOGIN SCREEN ================= -->
+  <div id="loginScreen" class="min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-sm fade">
+      <div class="text-center mb-8">
+        <div class="text-5xl mb-2">💰</div>
+        <h1 class="text-2xl font-bold text-white">SpendPulse</h1>
+        <p class="text-slate-400 text-sm">Secure Financial Ledger</p>
+      </div>
+      <form id="loginForm" class="bg-slate-800 rounded-2xl shadow-xl p-6 space-y-4">
+        <div>
+          <label class="text-sm text-slate-300">Username</label>
+          <input id="loginUser" type="text" required autocomplete="username"
+            class="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 focus:ring-2 focus:ring-brand-500 outline-none" />
+        </div>
+        <div>
+          <label class="text-sm text-slate-300">Password</label>
+          <input id="loginPass" type="password" required autocomplete="current-password"
+            class="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 focus:ring-2 focus:ring-brand-500 outline-none" />
+        </div>
+        <div id="loginError" class="text-red-400 text-sm hidden"></div>
+        <button type="submit"
+          class="w-full bg-brand-600 hover:bg-brand-700 rounded-lg py-2 font-semibold transition">Sign In</button>
+        <p class="text-xs text-slate-500 text-center">Default admin: admin / admin123</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= APP SHELL ================= -->
+  <div id="appShell" class="hidden min-h-screen flex flex-col">
+    <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">💰</span>
+        <span class="font-bold text-lg">SpendPulse</span>
+        <span id="roleBadge" class="ml-2 text-xs px-2 py-0.5 rounded-full bg-brand-600"></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="userLabel" class="text-sm text-slate-300"></span>
+        <button id="profileBtn" class="text-sm px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">Profile</button>
+        <button id="logoutBtn" class="text-sm px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700">Logout</button>
+      </div>
+    </header>
+
+    <main class="flex-1 p-4 max-w-6xl w-full mx-auto space-y-6">
+      <!-- Summary Cards -->
+      <section id="summaryCards" class="grid grid-cols-1 sm:grid-cols-3 gap-4"></section>
+
+      <!-- Filters -->
+      <section class="bg-slate-800 rounded-2xl p-4 space-y-4">
+        <div class="flex flex-wrap items-center gap-3">
+          <h2 class="font-semibold">Filters</h2>
+          <select id="filterMode" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+            <option value="day">Daily</option>
+            <option value="month">Monthly</option>
+            <option value="custom">Custom Range</option>
+            <option value="all">All</option>
+          </select>
+          <input id="filterDay" type="date" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <div id="filterMonthWrap" class="hidden items-center gap-2">
+            <input id="filterYear" type="number" min="2000" max="2100" value="2026" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm w-24" />
+            <input id="filterMonth" type="number" min="1" max="12" value="7" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm w-20" />
+          </div>
+          <div id="filterCustomWrap" class="hidden items-center gap-2">
+            <input id="filterStart" type="date" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            <span class="text-slate-400">to</span>
+            <input id="filterEnd" type="date" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <select id="filterUser" class="hidden bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm"></select>
+          <button id="applyFilter" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">Apply</button>
+          <button id="exportBtn" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-2 rounded-lg text-sm font-semibold">⬇ Download CSV</button>
+        </div>
+        <div id="filterError" class="text-red-400 text-sm hidden"></div>
+      </section>
+
+      <!-- New Transaction Form -->
+      <section class="bg-slate-800 rounded-2xl p-4">
+        <h2 class="font-semibold mb-3">📝 Log New Transaction</h2>
+        <form id="txnForm" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <input id="ref" placeholder="Reference Number *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <div class="flex gap-2">
+            <input id="txnDate" type="date" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+            <input id="txnTime" type="time" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <input id="sender" placeholder="Sender Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="receiver" placeholder="Receiver Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="amount" type="number" step="0.01" min="0" placeholder="Amount *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <select id="txnType" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+            <option>Bank Transfer</option><option>Mobile Wallet</option><option>Cash Deposit</option>
+            <option>Cheque</option><option>Online Payment</option><option>ATM Withdrawal</option><option>Other</option>
+          </select>
+          <input id="purpose" placeholder="Purpose *" required class="md:col-span-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <div class="md:col-span-2">
+            <label class="text-xs text-slate-400">Receipt Image (converted to Base64)</label>
+            <input id="receipt" type="file" accept="image/*" class="mt-1 w-full text-sm text-slate-300" />
+            <div id="receiptPreview" class="mt-2 hidden"><img id="receiptImg" class="max-h-32 rounded-lg border border-slate-700" /></div>
+          </div>
+          <div id="txnError" class="text-red-400 text-sm md:col-span-2 hidden"></div>
+          <button type="submit" class="md:col-span-2 bg-brand-600 hover:bg-brand-700 py-2 rounded-lg font-semibold transition">💾 Save Transaction</button>
+        </form>
+      </section>
+
+      <!-- Admin: Create User -->
+      <section id="adminPanel" class="hidden bg-slate-800 rounded-2xl p-4">
+        <h2 class="font-semibold mb-3">👑 Admin — Create User</h2>
+        <form id="userForm" class="flex flex-wrap gap-2 items-end">
+          <input id="newUser" placeholder="Username" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="newPass" type="password" placeholder="Password" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <select id="newRole" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+            <option value="user">user</option><option value="admin">admin</option>
+          </select>
+          <button type="submit" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">Create</button>
+          <span id="userMsg" class="text-sm text-emerald-400"></span>
+        </form>
+      </section>
+
+      <!-- Transactions Table -->
+      <section class="bg-slate-800 rounded-2xl p-4 overflow-x-auto">
+        <h2 class="font-semibold mb-3">📋 Transaction Log</h2>
+        <table class="w-full text-sm">
+          <thead class="text-slate-400 border-b border-slate-700">
+            <tr>
+              <th class="text-left py-2 px-2">Ref #</th><th class="text-left px-2">Date</th>
+              <th class="text-left px-2">Time</th><th class="text-right px-2">Amount</th>
+              <th class="text-left px-2">Sender</th><th class="text-left px-2">Receiver</th>
+              <th class="text-left px-2">Purpose</th><th class="text-left px-2">Type</th>
+              <th id="loggedByHead" class="text-left px-2 hidden">Logged By</th>
+              <th class="text-left px-2">Receipt</th>
+            </tr>
+          </thead>
+          <tbody id="txnBody" class="divide-y divide-slate-700"></tbody>
+        </table>
+        <div id="emptyState" class="text-center text-slate-500 py-8">No transactions found.</div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ================= PROFILE MODAL ================= -->
+  <div id="profileModal" class="hidden fixed inset-0 bg-black/60 z-20 flex items-center justify-center px-4">
+    <div class="bg-slate-800 rounded-2xl p-6 w-full max-w-sm fade space-y-3">
+      <h2 class="text-lg font-semibold">👤 My Profile</h2>
+      <div id="profileInfo" class="text-sm text-slate-300"></div>
+      <form id="resetForm" class="space-y-2">
+        <input id="curPass" type="password" placeholder="Current Password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+        <input id="newPass1" type="password" placeholder="New Password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+        <input id="newPass2" type="password" placeholder="Confirm New Password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+        <div id="resetError" class="text-red-400 text-sm hidden"></div>
+        <div class="flex gap-2">
+          <button type="submit" class="flex-1 bg-brand-600 hover:bg-brand-700 py-2 rounded-lg text-sm font-semibold">Update Password</button>
+          <button type="button" id="closeProfile" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded-lg text-sm">Close</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-700 px-4 py-2 rounded-lg text-sm shadow-lg z-30"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

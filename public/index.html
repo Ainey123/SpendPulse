@@ -99,13 +99,13 @@
 
       <!-- Auto-Extract from Screenshot -->
       <section class="bg-slate-800 rounded-2xl p-4 border border-brand-600/40">
-        <h2 class="font-semibold mb-1">🤖 Auto-Extract & Bulk Save</h2>
-        <p class="text-xs text-slate-400 mb-3">Upload multiple transaction screenshots. AI will extract details and automatically save them.</p>
+        <h2 class="font-semibold mb-1">🤖 Auto-Extract & Bulk Upload</h2>
+        <p class="text-xs text-slate-400 mb-3">Upload multiple transaction screenshots. AI will extract details and queue them for your review.</p>
         <div class="flex flex-wrap items-end gap-3">
           <div class="flex-1 min-w-[220px]">
             <input id="ocrFile" type="file" accept="image/*" multiple class="w-full text-sm text-slate-300" />
           </div>
-          <button id="ocrBtn" type="button" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">⚡ Scan & Auto-Save</button>
+          <button id="ocrBtn" type="button" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">⚡ Scan Images</button>
         </div>
         <div id="ocrStatus" class="text-sm text-slate-400 mt-2 hidden"></div>
         <div id="ocrProgress" class="hidden mt-2 space-y-2"></div>
@@ -115,6 +115,13 @@
             <pre id="ocrRawText" class="mt-1 whitespace-pre-wrap bg-slate-900 rounded p-2"></pre>
           </details>
         </div>
+      </section>
+
+      <!-- Pending Scans Queue -->
+      <section id="pendingScansSection" class="hidden bg-slate-800 rounded-2xl p-4 border border-yellow-600/40">
+        <h2 class="font-semibold mb-3 text-yellow-400">⏳ Pending Review (<span id="pendingCount">0</span>)</h2>
+        <p class="text-xs text-slate-400 mb-3">Click on a scanned transaction below to load it into the form for review and saving.</p>
+        <div id="pendingScansList" class="space-y-2 max-h-40 overflow-y-auto"></div>
       </section>
 
       <!-- New Transaction Form -->
@@ -128,7 +135,8 @@
           </div>
           <input id="sender" placeholder="Sender Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
           <input id="senderAccount" placeholder="Sender Account / Phone" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="receiver" placeholder="Receiver Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="receiver" list="receiversList" placeholder="Receiver Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" autocomplete="off" />
+          <datalist id="receiversList"></datalist>
           <input id="receiverAccount" placeholder="Receiver Account / Phone / IBAN" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
           <div class="flex gap-2">
             <input id="amount" type="number" step="0.01" min="0" placeholder="Amount *" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
@@ -146,6 +154,18 @@
           </div>
           <div id="txnError" class="text-red-400 text-sm md:col-span-2 hidden"></div>
           <button type="submit" class="md:col-span-2 bg-brand-600 hover:bg-brand-700 py-2 rounded-lg font-semibold transition">💾 Save Transaction</button>
+        </form>
+      </section>
+
+      <!-- Manage Contacts -->
+      <section class="bg-slate-800 rounded-2xl p-4">
+        <h2 class="font-semibold mb-3">👥 Manage Contacts</h2>
+        <form id="contactForm" class="flex flex-wrap gap-2 items-end">
+          <input id="contactName" placeholder="Contact Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="contactPhone" placeholder="Phone Number" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <input id="contactAccount" placeholder="Account / IBAN" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+          <button type="submit" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">Add Contact</button>
+          <span id="contactMsg" class="text-sm"></span>
         </form>
       </section>
 

@@ -6,6 +6,9 @@ const API = ""; // same-origin on Vercel
 let TOKEN = localStorage.getItem("sp_token") || "";
 let CURRENT_USER = null;
 let ALL_TXNS = [];
+let ALL_CONTACTS = [];
+let PENDING_SCANS = [];
+let CURRENT_PENDING_INDEX = -1;
 let CURRENT_ROLE = "user";
 
 // ---------- helpers ----------
@@ -77,7 +80,19 @@ async function enterApp() {
       }
     } catch (_) {}
   }
+  await loadContacts();
   await loadTransactions();
+}
+
+async function loadContacts() {
+  const data = await api("/api/contacts");
+  if (!data.error && data.contacts) {
+    ALL_CONTACTS = data.contacts;
+    const list = el("receiversList");
+    if (list) {
+      list.innerHTML = ALL_CONTACTS.map(c => `<option value="${c.name}">${c.phone ? c.phone : ''}</option>`).join("");
+    }
+  }
 }
 
 // ---------- data ----------
@@ -228,6 +243,59 @@ async function fileToBase64(file) {
 }
 
 // ---------- OCR auto-extract flow ----------
+
+function renderPendingScans() {
+  const sec = el("pendingScansSection");
+  const list = el("pendingScansList");
+  el("pendingCount").textContent = PENDING_SCANS.length;
+  if (PENDING_SCANS.length === 0) {
+    sec.classList.add("hidden");
+    return;
+  }
+  sec.classList.remove("hidden");
+  list.innerHTML = PENDING_SCANS.map((scan, i) => `
+    <div class="flex justify-between items-center bg-slate-900 border border-slate-700 p-3 rounded-lg cursor-pointer hover:bg-slate-700 transition" onclick="loadPendingScan(${i})">
+      <div>
+        <div class="text-sm font-semibold text-emerald-400">PKR ${scan.amount} &rarr; ${scan.receiver_name}</div>
+        <div class="text-xs text-slate-400">File: ${scan._filename}</div>
+      </div>
+      <button class="bg-brand-600 hover:bg-brand-700 px-3 py-1 rounded text-xs font-semibold">Review</button>
+    </div>
+  `).join("");
+}
+
+window.loadPendingScan = function(index) {
+  const data = PENDING_SCANS[index];
+  if (!data) return;
+  CURRENT_PENDING_INDEX = index;
+  
+  if (data.date) el("txnDate").value = data.date;
+  if (data.time) el("txnTime").value = (data.time || "").length <= 5 ? data.time : data.time.slice(0, 5);
+  if (data.sender_name) el("sender").value = data.sender_name;
+  if (data.sender_account) el("senderAccount").value = data.sender_account;
+  if (data.receiver_name) el("receiver").value = data.receiver_name;
+  if (data.receiver_account) el("receiverAccount").value = data.receiver_account;
+  if (data.amount) el("amount").value = data.amount;
+  if (data.currency) el("currency").value = data.currency;
+  if (!el("purpose").value) el("purpose").value = data.purpose || "Auto-extracted from screenshot";
+  if (!el("txnType").value && data.transaction_type) {
+    const opt = [...el("txnType").options].find(o => o.value.toLowerCase() === data.transaction_type.toLowerCase());
+    if (opt) el("txnType").value = opt.value;
+  }
+  if (!el("ref").value) el("ref").value = "AUTO-" + Date.now().toString().slice(-6);
+  
+  // Display receipt preview if we have the b64
+  if (data.receipt_base64) {
+    // Hack: We can't set the file input value, but we can store it in a data attribute or global for saving
+    window.__current_receipt_b64 = data.receipt_base64;
+    el("receiptPreview").classList.remove("hidden");
+    el("receiptImg").src = data.receipt_base64.startsWith("data:") ? data.receipt_base64 : "data:image/png;base64," + data.receipt_base64;
+  }
+  
+  el("txnForm").scrollIntoView({ behavior: "smooth" });
+  toast("Loaded pending transaction. Review and Save!");
+};
+
 el("ocrBtn").addEventListener("click", async () => {
   const files = el("ocrFile").files;
   const status = el("ocrStatus");
@@ -271,35 +339,26 @@ el("ocrBtn").addEventListener("click", async () => {
         continue;
       }
       
-      // Auto-save the transaction
-      const payload = {
-        reference_number: "AUTO-" + Date.now().toString().slice(-6) + "-" + i,
-        date: data.date || new Date().toISOString().slice(0, 10),
-        time: data.time || new Date().toISOString().slice(11, 16),
-        amount: data.amount || 0,
-        currency: data.currency || "PKR",
-        sender_name: data.sender_name || "Unknown",
-        sender_account: data.sender_account || "",
-        receiver_name: data.receiver_name || "Unknown",
-        receiver_account: data.receiver_account || "",
-        purpose: data.purpose || "Auto-extracted from screenshot",
-        transaction_type: data.transaction_type || "Bank Transfer",
-        receipt_base64: b64,
-      };
-      
-      const saveRes = await api("/api/transactions", "POST", payload);
-      if (saveRes.error) {
+      if (!data.amount || parseFloat(data.amount) === 0 || !data.receiver_name) {
         if (pItem) {
-          pItem.innerHTML = `❌ <b>${file.name}</b> save failed: ${saveRes.error}`;
-          pItem.classList.add("text-red-400");
+          pItem.innerHTML = `⚠️ <b>${file.name}</b> scanned, but amount/receiver is missing. (Did you set GEMINI_API_KEY?)`;
+          pItem.classList.add("text-yellow-400");
         }
       } else {
         if (pItem) {
-          pItem.innerHTML = `✅ <b>${file.name}</b> saved! (Sent PKR ${payload.amount} to ${payload.receiver_name})`;
+          pItem.innerHTML = `✅ <b>${file.name}</b> scanned successfully!`;
           pItem.classList.add("text-emerald-400");
         }
-        successCount++;
       }
+
+      const scanData = {
+        ...data,
+        receipt_base64: b64,
+        _filename: file.name
+      };
+      
+      PENDING_SCANS.push(scanData);
+      successCount++;
     } catch (err) {
       if (pItem) {
         pItem.innerHTML = `❌ <b>${file.name}</b> error: ${err.message}`;
@@ -308,18 +367,22 @@ el("ocrBtn").addEventListener("click", async () => {
     }
   }
   
-  status.innerHTML = `Finished processing. ${successCount} out of ${files.length} saved successfully.`;
+  status.innerHTML = `Finished processing. ${successCount} out of ${files.length} ready for review.`;
   status.className = "text-sm text-emerald-400 mt-2 font-semibold";
   
-  await loadTransactions();
-  toast(`✅ Bulk upload complete (${successCount} saved)`);
+  el("ocrFile").value = "";
+  renderPendingScans();
+  
+  if (PENDING_SCANS.length > 0 && CURRENT_PENDING_INDEX === -1) {
+    loadPendingScan(0);
+  }
 });
 
 el("txnForm").addEventListener("submit", async e => {
   e.preventDefault();
   showError("txnError", "");
   const file = el("receipt").files[0];
-  let b64 = "";
+  let b64 = window.__current_receipt_b64 || ""; // use pending b64 if set
   if (file) {
     if (file.size > 2 * 1024 * 1024) { showError("txnError", "Receipt too large (>2MB)."); return; }
     b64 = await fileToBase64(file);
@@ -340,11 +403,47 @@ el("txnForm").addEventListener("submit", async e => {
   };
   const data = await api("/api/transactions", "POST", payload);
   if (data.error) { showError("txnError", data.error); return; }
+  
+  // Success!
   el("txnForm").reset();
   el("receiptPreview").classList.add("hidden");
+  window.__current_receipt_b64 = "";
+  
+  if (CURRENT_PENDING_INDEX !== -1) {
+    PENDING_SCANS.splice(CURRENT_PENDING_INDEX, 1);
+    CURRENT_PENDING_INDEX = -1;
+    renderPendingScans();
+  }
+  
   toast("✅ Transaction saved");
   await loadTransactions();
 });
+
+const contactForm = el("contactForm");
+if (contactForm) {
+  contactForm.addEventListener("submit", async e => {
+    e.preventDefault();
+    const btn = contactForm.querySelector("button");
+    btn.disabled = true;
+    const data = await api("/api/contacts", "POST", {
+      name: el("contactName").value.trim(),
+      phone: el("contactPhone").value.trim(),
+      account: el("contactAccount").value.trim(),
+    });
+    btn.disabled = false;
+    const msg = el("contactMsg");
+    if (data.error) { 
+      msg.textContent = data.error; 
+      msg.className = "text-sm text-red-400"; 
+      return; 
+    }
+    msg.textContent = "Contact added ✅";
+    msg.className = "text-sm text-emerald-400";
+    contactForm.reset();
+    await loadContacts();
+    setTimeout(() => { msg.textContent = ""; }, 3000);
+  });
+}
 
 el("userForm").addEventListener("submit", async e => {
   e.preventDefault();

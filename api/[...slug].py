@@ -24,6 +24,7 @@ TRANSACTIONS_COLUMNS = [
     "sender_account", "receiver_name", "receiver_account", "purpose",
     "transaction_type", "receipt_base64", "logged_by",
 ]
+CONTACTS_COLUMNS = ["name", "phone", "account", "logged_by"]
 
 # ---------------------------------------------------------------- helpers
 
@@ -120,8 +121,14 @@ def _sheet(tab):
     try:
         ws = sh.worksheet(tab)
     except Exception:  # noqa: BLE001
-        ws = sh.add_worksheet(title=tab, rows=1000, cols=len(TRANSACTIONS_COLUMNS))
-        ws.append_row(USERS_COLUMNS if tab == "users" else TRANSACTIONS_COLUMNS)
+        if tab == "users":
+            headers = USERS_COLUMNS
+        elif tab == "contacts":
+            headers = CONTACTS_COLUMNS
+        else:
+            headers = TRANSACTIONS_COLUMNS
+        ws = sh.add_worksheet(title=tab, rows=1000, cols=len(headers))
+        ws.append_row(headers)
     return ws
 
 
@@ -144,7 +151,12 @@ def append_row(tab, row_dict):
     headers = [h.strip().lower() for h in ws.row_values(1)]
     if not headers:
         # Sheet exists but has no header row yet — seed it.
-        headers = USERS_COLUMNS if tab == "users" else TRANSACTIONS_COLUMNS
+        if tab == "users":
+            headers = USERS_COLUMNS
+        elif tab == "contacts":
+            headers = CONTACTS_COLUMNS
+        else:
+            headers = TRANSACTIONS_COLUMNS
         ws.append_row(headers)
     ordered = [row_dict.get(h, "") for h in headers]
     ws.append_row(ordered)
@@ -329,6 +341,35 @@ def handle_transactions_post(environ):
     }
     append_row("transactions", row)
     return _json(200, {"ok": True, "transaction": row})
+
+
+def handle_contacts_get(environ):
+    user = current_user()
+    if not user:
+        return _json(401, {"error": "Not authenticated"})
+    rows = read_all("contacts")
+    if user.get("role") != "admin":
+        rows = [r for r in rows if r.get("logged_by") == user["username"]]
+    return _json(200, {"contacts": rows})
+
+
+def handle_contacts_post(environ):
+    user = current_user()
+    if not user:
+        return _json(401, {"error": "Not authenticated"})
+    data = _read_body(environ)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return _json(400, {"error": "Contact name is required"})
+    
+    row = {
+        "name": name,
+        "phone": (data.get("phone") or "").strip(),
+        "account": (data.get("account") or "").strip(),
+        "logged_by": user["username"],
+    }
+    append_row("contacts", row)
+    return _json(200, {"ok": True, "contact": row})
 
 
 # ---------------------------------------------------------------- OCR extraction
@@ -633,6 +674,9 @@ def _app_inner(environ, start_response):
         "/api/users/list": handle_list_users,
         "/api/transactions": (
             handle_transactions_get if method == "GET" else handle_transactions_post
+        ),
+        "/api/contacts": (
+            handle_contacts_get if method == "GET" else handle_contacts_post
         ),
         "/api/extract": handle_extract,
     }

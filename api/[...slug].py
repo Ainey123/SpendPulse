@@ -301,12 +301,15 @@ def handle_transactions_post(environ):
 # ---------------------------------------------------------------- OCR extraction
 
 
-def _load_reader():
-    """Lazily import and build the EasyOCR reader (heavy; only on /api/extract)."""
-    from easyocr import Reader
-    # English + Urdu/Arabic script for regional bank apps.
-    reader = Reader(["en", "ur"], gpu=False, verbose=False)
-    return reader
+def _vision_client():
+    """Build a Google Cloud Vision client from the service-account credentials."""
+    from google.cloud import vision
+
+    raw = os.environ.get("GOOGLE_CREDENTIALS", "")
+    if not raw:
+        raise RuntimeError("GOOGLE_CREDENTIALS environment variable is not set.")
+    info = json.loads(raw)
+    return vision.ImageAnnotatorClient.from_service_account_info(info)
 
 
 def _extract_fields(text):
@@ -410,11 +413,18 @@ def handle_extract(environ):
         f.write(img_bytes)
 
     try:
-        reader = _load_reader()
-        ocr = reader.readtext(tmp, detail=0, paragraph=False)
-        text = "\n".join(str(x) for x in ocr)
+        client = _vision_client()
+        image = {"content": img_bytes}
+        response = client.text_detection(image=image)
+        annotations = response.text_annotations
+        text = annotations[0].description if annotations else ""
+        if not text:
+            return _json(200, _extract_fields(""))
     except Exception as e:  # noqa: BLE001
-        return _json(500, {"error": f"OCR failed: {e}", "hint": "EasyOCR model may exceed Vercel function size; run locally or use a smaller runtime."})
+        return _json(500, {
+            "error": f"OCR failed: {e}",
+            "hint": "Enable the Cloud Vision API on your GCP project and ensure GOOGLE_CREDENTIALS has access.",
+        })
 
     fields = _extract_fields(text)
     return _json(200, fields)

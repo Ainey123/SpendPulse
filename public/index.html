@@ -67,7 +67,8 @@
 
     <main class="flex-1 p-4 max-w-6xl w-full mx-auto space-y-6">
       <!-- Summary Cards -->
-      <section id="summaryCards" class="grid grid-cols-1 sm:grid-cols-3 gap-4"></section>
+      <section id="summaryCards" class="grid grid-cols-1 sm:grid-cols-4 gap-4"></section>
+      <section id="contactBreakdown" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4"></section>
 
       <!-- Filters -->
       <section class="bg-slate-800 rounded-2xl p-4 space-y-4">
@@ -98,15 +99,16 @@
 
       <!-- Auto-Extract from Screenshot -->
       <section class="bg-slate-800 rounded-2xl p-4 border border-brand-600/40">
-        <h2 class="font-semibold mb-1">🤖 Auto-Extract from Screenshot</h2>
-        <p class="text-xs text-slate-400 mb-3">Upload a photo/screenshot of the transaction. An AI vision model reads the sender, receiver, account numbers, exact date, time & amount — then you review and confirm.</p>
+        <h2 class="font-semibold mb-1">🤖 Auto-Extract & Bulk Save</h2>
+        <p class="text-xs text-slate-400 mb-3">Upload multiple transaction screenshots. AI will extract details and automatically save them.</p>
         <div class="flex flex-wrap items-end gap-3">
           <div class="flex-1 min-w-[220px]">
-            <input id="ocrFile" type="file" accept="image/*" capture="environment" class="w-full text-sm text-slate-300" />
+            <input id="ocrFile" type="file" accept="image/*" multiple class="w-full text-sm text-slate-300" />
           </div>
-          <button id="ocrBtn" type="button" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">⚡ Scan & Fill</button>
+          <button id="ocrBtn" type="button" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">⚡ Scan & Auto-Save</button>
         </div>
         <div id="ocrStatus" class="text-sm text-slate-400 mt-2 hidden"></div>
+        <div id="ocrProgress" class="hidden mt-2 space-y-2"></div>
         <div id="ocrRaw" class="hidden mt-2">
           <details class="text-xs text-slate-500">
             <summary class="cursor-pointer">Show extracted raw text</summary>

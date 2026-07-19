@@ -118,10 +118,25 @@ function renderTable() {
     rows = rows.filter(r => r.logged_by === userFilter);
   }
   const total = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const receivers = {};
+  rows.forEach(r => {
+    const name = (r.receiver_name || "Unknown").trim();
+    receivers[name] = (receivers[name] || 0) + (parseFloat(r.amount) || 0);
+  });
+  const numContacts = Object.keys(receivers).length;
+
   el("summaryCards").innerHTML = `
     <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Total Sent</div><div class="text-xl font-bold">PKR ${total.toLocaleString(undefined, {minimumFractionDigits:2})}</div></div>
     <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Transactions</div><div class="text-xl font-bold">${rows.length}</div></div>
-    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Avg Amount</div><div class="text-xl font-bold">PKR ${rows.length ? (total/rows.length).toLocaleString(undefined,{minimumFractionDigits:2}) : "0.00"}</div></div>`;
+    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Avg Amount</div><div class="text-xl font-bold">PKR ${rows.length ? (total/rows.length).toLocaleString(undefined,{minimumFractionDigits:2}) : "0.00"}</div></div>
+    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Active Contacts</div><div class="text-xl font-bold">${numContacts}</div></div>`;
+
+  el("contactBreakdown").innerHTML = Object.entries(receivers).map(([name, amount]) => `
+    <div class="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex justify-between items-center">
+      <div class="text-sm font-semibold truncate pr-2">${name}</div>
+      <div class="text-sm text-brand-400 font-bold whitespace-nowrap">PKR ${amount.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
+    </div>
+  `).join("");
 
   const body = el("txnBody");
   body.innerHTML = "";
@@ -214,50 +229,90 @@ async function fileToBase64(file) {
 
 // ---------- OCR auto-extract flow ----------
 el("ocrBtn").addEventListener("click", async () => {
-  const file = el("ocrFile").files[0];
+  const files = el("ocrFile").files;
   const status = el("ocrStatus");
-  if (!file) { status.textContent = "Please choose an image first."; status.classList.remove("hidden"); return; }
-  status.textContent = "⏳ Reading image (this can take a few seconds)…";
+  const progress = el("ocrProgress");
+  if (!files || files.length === 0) { 
+    status.textContent = "Please choose at least one image first."; 
+    status.classList.remove("hidden"); 
+    return; 
+  }
+  
+  status.textContent = `⏳ Processing ${files.length} image(s)...`;
   status.className = "text-sm text-slate-400 mt-2";
   status.classList.remove("hidden");
   el("ocrRaw").classList.add("hidden");
-  try {
-    const b64 = await fileToBase64(file);
-    const data = await api("/api/extract", "POST", { image_base64: b64 });
-    if (data.error) {
-      status.innerHTML = "❌ Extraction failed: " + data.error +
-        "<br><span class='text-xs'>Set <b>VISION_PROVIDER</b> + <b>GEMINI_API_KEY</b> (or OPENAI_API_KEY) in Vercel env vars.</span>";
-      status.className = "text-sm text-red-400 mt-2";
-      return;
-    }
-    // Pre-fill the transaction form (LLM returns accurate structured fields)
-    if (data.date) el("txnDate").value = data.date;
-    if (data.time) el("txnTime").value = (data.time || "").length <= 5 ? data.time : data.time.slice(0, 5);
-    if (data.sender_name) el("sender").value = data.sender_name;
-    if (data.sender_account) el("senderAccount").value = data.sender_account;
-    if (data.receiver_name) el("receiver").value = data.receiver_name;
-    if (data.receiver_account) el("receiverAccount").value = data.receiver_account;
-    if (data.amount) el("amount").value = data.amount;
-    if (data.currency) el("currency").value = data.currency;
-    if (!el("purpose").value) el("purpose").value = data.purpose || "Auto-extracted from screenshot";
-    if (!el("txnType").value && data.transaction_type) {
-      const opt = [...el("txnType").options].find(o => o.value.toLowerCase() === data.transaction_type.toLowerCase());
-      if (opt) el("txnType").value = opt.value;
-    }
-    // auto reference if empty
-    if (!el("ref").value) el("ref").value = "AUTO-" + Date.now().toString().slice(-6);
-
-    status.innerHTML = "✅ Filled! Review the fields below and press <b>Save Transaction</b>.";
-    status.className = "text-sm text-emerald-400 mt-2";
-    if (data.raw_text) {
-      el("ocrRaw").classList.remove("hidden");
-      el("ocrRawText").textContent = data.raw_text;
-    }
-    toast("Fields auto-filled — review & save");
-  } catch (err) {
-    status.textContent = "❌ Extraction failed: " + err.message;
-    status.className = "text-sm text-red-400 mt-2";
+  if (progress) {
+    progress.innerHTML = "";
+    progress.classList.remove("hidden");
   }
+  
+  let successCount = 0;
+  
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    let pItem = null;
+    if (progress) {
+      pItem = document.createElement("div");
+      pItem.className = "text-xs text-slate-300 p-2 bg-slate-900 rounded";
+      pItem.textContent = `Scanning file ${i + 1}/${files.length}: ${file.name}...`;
+      progress.appendChild(pItem);
+    }
+    
+    try {
+      const b64 = await fileToBase64(file);
+      const data = await api("/api/extract", "POST", { image_base64: b64 });
+      
+      if (data.error) {
+        if (pItem) {
+          pItem.innerHTML = `❌ <b>${file.name}</b> failed: ${data.error}`;
+          pItem.classList.add("text-red-400");
+        }
+        continue;
+      }
+      
+      // Auto-save the transaction
+      const payload = {
+        reference_number: "AUTO-" + Date.now().toString().slice(-6) + "-" + i,
+        date: data.date || new Date().toISOString().slice(0, 10),
+        time: data.time || new Date().toISOString().slice(11, 16),
+        amount: data.amount || 0,
+        currency: data.currency || "PKR",
+        sender_name: data.sender_name || "Unknown",
+        sender_account: data.sender_account || "",
+        receiver_name: data.receiver_name || "Unknown",
+        receiver_account: data.receiver_account || "",
+        purpose: data.purpose || "Auto-extracted from screenshot",
+        transaction_type: data.transaction_type || "Bank Transfer",
+        receipt_base64: b64,
+      };
+      
+      const saveRes = await api("/api/transactions", "POST", payload);
+      if (saveRes.error) {
+        if (pItem) {
+          pItem.innerHTML = `❌ <b>${file.name}</b> save failed: ${saveRes.error}`;
+          pItem.classList.add("text-red-400");
+        }
+      } else {
+        if (pItem) {
+          pItem.innerHTML = `✅ <b>${file.name}</b> saved! (Sent PKR ${payload.amount} to ${payload.receiver_name})`;
+          pItem.classList.add("text-emerald-400");
+        }
+        successCount++;
+      }
+    } catch (err) {
+      if (pItem) {
+        pItem.innerHTML = `❌ <b>${file.name}</b> error: ${err.message}`;
+        pItem.classList.add("text-red-400");
+      }
+    }
+  }
+  
+  status.innerHTML = `Finished processing. ${successCount} out of ${files.length} saved successfully.`;
+  status.className = "text-sm text-emerald-400 mt-2 font-semibold";
+  
+  await loadTransactions();
+  toast(`✅ Bulk upload complete (${successCount} saved)`);
 });
 
 el("txnForm").addEventListener("submit", async e => {

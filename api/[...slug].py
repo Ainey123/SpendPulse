@@ -625,6 +625,35 @@ def app(environ, start_response):
         "/api/extract": handle_extract,
     }
 
+    if path == "/api/debug":
+        try:
+            raw = os.environ.get("GOOGLE_CREDENTIALS", "<MISSING>")
+            raw_preview = (raw[:60] + "...") if len(raw) > 60 else raw
+            info = None
+            cred_err = None
+            try:
+                info = json.loads(raw.replace("\n", "\\n")) if "\n" in raw else json.loads(raw)
+            except Exception as e:  # noqa: BLE001
+                cred_err = f"{type(e).__name__}: {e}"
+            sid = os.environ.get("SPREADSHEET_ID", "<MISSING>")
+            sheet_err = None
+            try:
+                if info:
+                    _client()
+                    _sheet("users")
+            except Exception as e:  # noqa: BLE001
+                sheet_err = f"{type(e).__name__}: {e}"
+            dbg = {
+                "creds_present": bool(raw and raw != "<MISSING>"),
+                "creds_preview": raw_preview,
+                "creds_parse_error": cred_err,
+                "spreadsheet_id": sid,
+                "sheet_access_error": sheet_err,
+            }
+            return _json(200, dbg)
+        except Exception as e:  # noqa: BLE001
+            return _json(500, {"error": f"debug failed: {type(e).__name__}: {e}"})
+
     if path in route_map:
         try:
             status, headers, body = route_map[path](environ)

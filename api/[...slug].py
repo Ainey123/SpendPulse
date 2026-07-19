@@ -563,7 +563,7 @@ def _extract_fields(text):
 
     def _grab_after(keywords):
         for kw in keywords:
-            m = re.search(rf"{kw}\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9 .'&()]{1,40})", lower)
+            m = re.search(rf"\b{kw}\b\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9 .'&()]{{1,40}})", lower)
             if m:
                 val = m.group(1).strip().title()
                 # Prefer a name: if it starts with a digit (phone), keep but trim.

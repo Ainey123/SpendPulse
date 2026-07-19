@@ -144,7 +144,7 @@ function renderTable() {
     <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Total Sent</div><div class="text-xl font-bold">PKR ${total.toLocaleString(undefined, {minimumFractionDigits:2})}</div></div>
     <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Transactions</div><div class="text-xl font-bold">${rows.length}</div></div>
     <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Avg Amount</div><div class="text-xl font-bold">PKR ${rows.length ? (total/rows.length).toLocaleString(undefined,{minimumFractionDigits:2}) : "0.00"}</div></div>
-    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Active Contacts</div><div class="text-xl font-bold">${numContacts}</div></div>`;
+    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Total Contacts</div><div class="text-xl font-bold">${ALL_CONTACTS.length}</div></div>`;
 
   el("contactBreakdown").innerHTML = Object.entries(receivers).map(([name, amount]) => `
     <div class="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex justify-between items-center">

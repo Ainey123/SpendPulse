@@ -88,8 +88,13 @@ def _credentials():
     try:
         info = json.loads(raw)
     except Exception:  # noqa: BLE001
-        # Allow a TOML-style [connections.gsheets] block to be ignored; we need JSON
-        raise RuntimeError("GOOGLE_CREDENTIALS must be valid service-account JSON.")
+        # Vercel may store the pasted JSON with literal newlines (invalid JSON).
+        # Escaping all newlines makes it valid: between-token newlines become
+        # whitespace, and the private_key's embedded newlines become proper \n.
+        try:
+            info = json.loads(raw.replace("\n", "\\n"))
+        except Exception:
+            raise RuntimeError("GOOGLE_CREDENTIALS must be valid service-account JSON (check newlines in private_key).")
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",

@@ -118,16 +118,36 @@ def _sheet(tab):
 
 
 def read_all(tab):
-    ws = _sheet(tab)
-    rows = ws.get_all_records()
-    return rows
+    """Read all rows as dicts with LOWERCASE keys (sheet headers may vary in case)."""
+    try:
+        ws = _sheet(tab)
+        raw = ws.get_all_records()
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for row in raw:
+        norm = {str(k).strip().lower(): v for k, v in row.items()}
+        out.append(norm)
+    return out
 
 
 def append_row(tab, row_dict):
     ws = _sheet(tab)
-    headers = ws.row_values(1)
+    headers = [h.strip().lower() for h in ws.row_values(1)]
+    if not headers:
+        # Sheet exists but has no header row yet — seed it.
+        headers = USERS_COLUMNS if tab == "users" else TRANSACTIONS_COLUMNS
+        ws.append_row(headers)
     ordered = [row_dict.get(h, "") for h in headers]
     ws.append_row(ordered)
+
+
+def headers_index(ws, column):
+    headers = [h.strip().lower() for h in ws.row_values(1)]
+    try:
+        return headers.index(column.lower()) + 1
+    except ValueError:
+        return 1
 
 
 def update_cell(tab, username, column, value):
@@ -137,15 +157,10 @@ def update_cell(tab, username, column, value):
         ws.update_cell(cell.row, headers_index(ws, column), value)
 
 
-def headers_index(ws, column):
-    headers = ws.row_values(1)
-    return headers.index(column) + 1
-
-
 def find_user(username):
     users = read_all("users")
     for u in users:
-        if u.get("username") == username:
+        if str(u.get("username", "")).strip().lower() == str(username).strip().lower():
             return u
     return None
 
@@ -197,7 +212,11 @@ def handle_login(environ):
     if not user or not verify_password(data.get("password", ""), user.get("password", "")):
         return _json(401, {"error": "Invalid username or password"})
     token = make_token(user["username"])
-    return _json(200, {"token": token, "username": user["username"], "role": user["role"]})
+    return _json(200, {
+        "token": token,
+        "username": user["username"],
+        "role": str(user.get("role", "user") or "user").strip().lower(),
+    })
 
 
 def handle_logout(environ):
@@ -210,7 +229,10 @@ def handle_me(environ):
     user = current_user()
     if not user:
         return _json(401, {"error": "Not authenticated"})
-    return _json(200, {"username": user["username"], "role": user["role"]})
+    return _json(200, {
+        "username": user["username"],
+        "role": str(user.get("role", "user") or "user").strip().lower(),
+    })
 
 
 def handle_reset_password(environ):
@@ -362,19 +384,33 @@ def _extract_fields(text):
     if tm:
         result["time"] = tm.group(1).upper().replace(" ", "")
 
-    # --- Sender / Receiver via keywords ---
-    sender_kw = ["from", "sender", "paid by", "debited from", "account", "payer"]
-    receiver_kw = ["to", "receiver", "beneficiary", "paid to", "credited to", "transferred to", "sent to"]
+    # --- Sender / Receiver ---
+    # 1) "sent Rs 1,500 to Ali Khan" / "received from Ali Khan" (very common on
+    #    Easypaisa/JazzCash/WhatsApp screenshots).
+    sent = re.search(r"sent\s+(?:rs\.?|pkr|₨)?\s*[\d,\.]+?\s+to\s+([A-Za-z][A-Za-z .'&]{1,40})", lower)
+    recv = re.search(r"received\s+(?:rs\.?|pkr|₨)?\s*[\d,\.]+?\s+from\s+([A-Za-z][A-Za-z .'&]{1,40})", lower)
+    if sent:
+        result["receiver_name"] = sent.group(1).strip().title()
+    if recv:
+        result["sender_name"] = recv.group(1).strip().title()
+
+    # 2) Keyword-based: "To: Ali Khan", "From: 0300...", "paid to X".
+    sender_kw = ["from", "sender", "paid by", "debited from", "payer"]
+    receiver_kw = ["to", "receiver", "beneficiary", "paid to", "credited to", "transferred to"]
 
     def _grab_after(keywords):
         for kw in keywords:
-            m = re.search(rf"{kw}\s*[:\-]?\s*([A-Za-z][A-Za-z .'&]{1,40})", lower)
+            m = re.search(rf"{kw}\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9 .'&()]{1,40})", lower)
             if m:
-                return m.group(1).strip().title()
+                val = m.group(1).strip().title()
+                # Prefer a name: if it starts with a digit (phone), keep but trim.
+                return val
         return ""
 
-    result["sender_name"] = _grab_after(sender_kw)
-    result["receiver_name"] = _grab_after(receiver_kw)
+    if not result["sender_name"]:
+        result["sender_name"] = _grab_after(sender_kw)
+    if not result["receiver_name"]:
+        result["receiver_name"] = _grab_after(receiver_kw)
 
     return result
 

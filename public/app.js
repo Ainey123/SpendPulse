@@ -58,9 +58,10 @@ function logout() {
 }
 
 async function enterApp() {
+  CURRENT_ROLE = (CURRENT_ROLE || "user").toString().toLowerCase();
   el("loginScreen").classList.add("hidden");
   el("appShell").classList.remove("hidden");
-  el("userLabel").textContent = CURRENT_USER;
+  el("userLabel").textContent = CURRENT_USER || "";
   el("roleBadge").textContent = CURRENT_ROLE.toUpperCase();
   const isAdmin = CURRENT_ROLE === "admin";
   el("adminPanel").classList.toggle("hidden", !isAdmin);
@@ -68,11 +69,13 @@ async function enterApp() {
   el("filterUser").classList.toggle("hidden", !isAdmin);
   el("profileInfo").textContent = `Username: ${CURRENT_USER}    Role: ${CURRENT_ROLE}`;
   if (isAdmin) {
-    const u = await api("/api/users/list");
-    if (u.users) {
-      el("filterUser").innerHTML = '<option value="">All users</option>' +
-        u.users.map(x => `<option value="${x.username}">${x.username}</option>`).join("");
-    }
+    try {
+      const u = await api("/api/users/list");
+      if (u.users) {
+        el("filterUser").innerHTML = '<option value="">All users</option>' +
+          u.users.map(x => `<option value="${x.username}">${x.username}</option>`).join("");
+      }
+    } catch (_) {}
   }
   await loadTransactions();
 }
@@ -96,9 +99,15 @@ function matchesFilter(t) {
 
 async function loadTransactions() {
   const data = await api("/api/transactions");
-  if (data.error) { toast(data.error); return; }
+  CURRENT_ROLE = (data.role || CURRENT_ROLE || "user").toString().toLowerCase();
+  if (data.error) {
+    showError("filterError", "⚠️ Could not load transactions: " + data.error +
+      "  (Check that SPREADSHEET_ID and GOOGLE_CREDENTIALS are set, and the 'transactions' tab exists.)");
+    ALL_TXNS = [];
+    renderTable();
+    return;
+  }
   ALL_TXNS = data.transactions || [];
-  CURRENT_ROLE = data.role || CURRENT_ROLE;
   renderTable();
 }
 
@@ -216,7 +225,8 @@ el("ocrBtn").addEventListener("click", async () => {
     const b64 = await fileToBase64(file);
     const data = await api("/api/extract", "POST", { image_base64: b64 });
     if (data.error) {
-      status.textContent = "❌ " + data.error;
+      status.innerHTML = "❌ OCR failed: " + data.error +
+        "<br><span class='text-xs'>Enable the <b>Cloud Vision API</b> on your GCP project and ensure GOOGLE_CREDENTIALS has access.</span>";
       status.className = "text-sm text-red-400 mt-2";
       return;
     }

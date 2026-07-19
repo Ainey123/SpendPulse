@@ -3,9 +3,15 @@
   "build": {
     "env": { "PYTHON_VERSION": "3.12" }
   },
-  "cleanUrls": true,
-  "github": { "silent": true },
-  "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  "outputDirectory": "public",
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python",
+      "config": { "runtime": "python3.12", "maxLambdaSize": "15mb" }
+    }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "api/index.py" }
   ]
 }

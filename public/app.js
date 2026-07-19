@@ -256,7 +256,7 @@ function renderPendingScans() {
   list.innerHTML = PENDING_SCANS.map((scan, i) => `
     <div class="flex justify-between items-center bg-slate-900 border border-slate-700 p-3 rounded-lg cursor-pointer hover:bg-slate-700 transition" onclick="loadPendingScan(${i})">
       <div>
-        <div class="text-sm font-semibold text-emerald-400">PKR ${scan.amount} &rarr; ${scan.receiver_name}</div>
+        <div class="text-sm font-semibold text-emerald-400">PKR ${scan.amount || "0"} &rarr; ${scan.receiver_name || "Unknown"}</div>
         <div class="text-xs text-slate-400">File: ${scan._filename}</div>
       </div>
       <button class="bg-brand-600 hover:bg-brand-700 px-3 py-1 rounded text-xs font-semibold">Review</button>

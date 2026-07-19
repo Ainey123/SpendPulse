@@ -598,6 +598,16 @@ def handle_extract(environ):
 
 
 def app(environ, start_response):
+    try:
+        return _app_inner(environ, start_response)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        tb = traceback.format_exc()
+        start_response("500 Internal Server Error", [("Content-Type", "text/plain")])
+        return [tb.encode()]
+
+
+def _app_inner(environ, start_response):
     path = urlparse(environ.get("PATH_INFO", "/")).path
     method = environ.get("REQUEST_METHOD", "GET")
 

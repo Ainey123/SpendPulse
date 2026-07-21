@@ -222,14 +222,7 @@ el("applyFilter").addEventListener("click", renderTable);
 el("filterUser").addEventListener("change", renderTable);
 el("exportBtn").addEventListener("click", downloadCSV);
 
-// receipt preview + base64
-el("receipt").addEventListener("change", e => {
-  const file = e.target.files[0];
-  if (!file) { el("receiptPreview").classList.add("hidden"); return; }
-  const reader = new FileReader();
-  reader.onload = () => { el("receiptImg").src = reader.result; el("receiptPreview").classList.remove("hidden"); };
-  reader.readAsDataURL(file);
-});
+// (receipt preview removed)
 
 async function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -241,58 +234,6 @@ async function fileToBase64(file) {
 }
 
 // ---------- OCR auto-extract flow ----------
-
-function renderPendingScans() {
-  const sec = el("pendingScansSection");
-  const list = el("pendingScansList");
-  el("pendingCount").textContent = PENDING_SCANS.length;
-  if (PENDING_SCANS.length === 0) {
-    sec.classList.add("hidden");
-    return;
-  }
-  sec.classList.remove("hidden");
-  list.innerHTML = PENDING_SCANS.map((scan, i) => `
-    <div class="flex justify-between items-center bg-slate-900 border border-slate-700 p-3 rounded-lg cursor-pointer hover:bg-slate-700 transition" onclick="loadPendingScan(${i})">
-      <div>
-        <div class="text-sm font-semibold text-emerald-400">PKR ${scan.amount || "0"} &rarr; ${scan.receiver_name || "Unknown"}</div>
-        <div class="text-xs text-slate-400">File: ${scan._filename}</div>
-      </div>
-      <button class="bg-brand-600 hover:bg-brand-700 px-3 py-1 rounded text-xs font-semibold">Review</button>
-    </div>
-  `).join("");
-}
-
-window.loadPendingScan = function(index) {
-  const data = PENDING_SCANS[index];
-  if (!data) return;
-  CURRENT_PENDING_INDEX = index;
-  
-  if (data.date) el("txnDate").value = data.date;
-  if (data.time) el("txnTime").value = (data.time || "").length <= 5 ? data.time : data.time.slice(0, 5);
-  if (data.sender_name) el("sender").value = data.sender_name;
-  if (data.sender_account) el("senderAccount").value = data.sender_account;
-  if (data.receiver_name) el("receiver").value = data.receiver_name;
-  if (data.receiver_account) el("receiverAccount").value = data.receiver_account;
-  if (data.amount) el("amount").value = data.amount;
-  if (data.currency) el("currency").value = data.currency;
-  if (!el("purpose").value) el("purpose").value = data.purpose || "Auto-extracted from screenshot";
-  if (!el("txnType").value && data.transaction_type) {
-    const opt = [...el("txnType").options].find(o => o.value.toLowerCase() === data.transaction_type.toLowerCase());
-    if (opt) el("txnType").value = opt.value;
-  }
-  if (!el("ref").value) el("ref").value = "AUTO-" + Date.now().toString().slice(-6);
-  
-  // Display receipt preview if we have the b64
-  if (data.receipt_base64) {
-    // Hack: We can't set the file input value, but we can store it in a data attribute or global for saving
-    window.__current_receipt_b64 = data.receipt_base64;
-    el("receiptPreview").classList.remove("hidden");
-    el("receiptImg").src = data.receipt_base64.startsWith("data:") ? data.receipt_base64 : "data:image/png;base64," + data.receipt_base64;
-  }
-  
-  el("txnForm").scrollIntoView({ behavior: "smooth" });
-  toast("Loaded pending transaction. Review and Save!");
-};
 
 el("ocrBtn").addEventListener("click", async () => {
   const files = el("ocrFile").files;
@@ -386,7 +327,6 @@ el("ocrBtn").addEventListener("click", async () => {
   status.className = "text-sm text-emerald-400 mt-2 font-semibold";
   
   el("ocrFile").value = "";
-  renderPendingScans();
   
   await loadTransactions();
   toast(`✅ Bulk upload complete (${successCount} saved)`);

@@ -67,8 +67,6 @@ async function enterApp() {
   el("userLabel").textContent = CURRENT_USER || "";
   el("roleBadge").textContent = CURRENT_ROLE.toUpperCase();
   const isAdmin = CURRENT_ROLE === "admin";
-  el("adminPanel").classList.toggle("hidden", !isAdmin);
-  el("loggedByHead").classList.toggle("hidden", !isAdmin);
   el("filterUser").classList.toggle("hidden", !isAdmin);
   el("profileInfo").textContent = `Username: ${CURRENT_USER}    Role: ${CURRENT_ROLE}`;
   if (isAdmin) {

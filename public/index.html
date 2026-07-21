@@ -124,65 +124,6 @@
         <div id="pendingScansList" class="space-y-2 max-h-40 overflow-y-auto"></div>
       </section>
 
-      <!-- New Transaction Form -->
-      <section class="bg-slate-800 rounded-2xl p-4">
-        <h2 class="font-semibold mb-3">📝 Log New Transaction <span class="text-xs text-slate-500">(edit auto-filled fields, then save)</span></h2>
-        <form id="txnForm" class="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <input id="ref" placeholder="Reference Number *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <div class="flex gap-2">
-            <input id="txnDate" type="date" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-            <input id="txnTime" type="time" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          </div>
-          <input id="sender" placeholder="Sender Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="senderAccount" placeholder="Sender Account / Phone" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="receiver" list="receiversList" placeholder="Receiver Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" autocomplete="off" />
-          <datalist id="receiversList"></datalist>
-          <input id="receiverAccount" placeholder="Receiver Account / Phone / IBAN" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <div class="flex gap-2">
-            <input id="amount" type="number" step="0.01" min="0" placeholder="Amount *" required class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-            <input id="currency" placeholder="PKR" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          </div>
-          <select id="txnType" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
-            <option>Bank Transfer</option><option>Mobile Wallet</option><option>Cash Deposit</option>
-            <option>Cheque</option><option>Online Payment</option><option>ATM Withdrawal</option><option>Other</option>
-          </select>
-          <input id="purpose" placeholder="Purpose *" required class="md:col-span-2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <div class="md:col-span-2">
-            <label class="text-xs text-slate-400">Receipt Image (converted to Base64)</label>
-            <input id="receipt" type="file" accept="image/*" class="mt-1 w-full text-sm text-slate-300" />
-            <div id="receiptPreview" class="mt-2 hidden"><img id="receiptImg" class="max-h-32 rounded-lg border border-slate-700" /></div>
-          </div>
-          <div id="txnError" class="text-red-400 text-sm md:col-span-2 hidden"></div>
-          <button type="submit" class="md:col-span-2 bg-brand-600 hover:bg-brand-700 py-2 rounded-lg font-semibold transition">💾 Save Transaction</button>
-        </form>
-      </section>
-
-      <!-- Manage Contacts -->
-      <section class="bg-slate-800 rounded-2xl p-4">
-        <h2 class="font-semibold mb-3">👥 Manage Contacts</h2>
-        <form id="contactForm" class="flex flex-wrap gap-2 items-end">
-          <input id="contactName" placeholder="Contact Name *" required class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="contactPhone" placeholder="Phone Number" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="contactAccount" placeholder="Account / IBAN" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <button type="submit" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">Add Contact</button>
-          <span id="contactMsg" class="text-sm"></span>
-        </form>
-      </section>
-
-      <!-- Admin: Create User -->
-      <section id="adminPanel" class="hidden bg-slate-800 rounded-2xl p-4">
-        <h2 class="font-semibold mb-3">👑 Admin — Create User</h2>
-        <form id="userForm" class="flex flex-wrap gap-2 items-end">
-          <input id="newUser" placeholder="Username" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <input id="newPass" type="password" placeholder="Password" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <select id="newRole" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
-            <option value="user">user</option><option value="admin">admin</option>
-          </select>
-          <button type="submit" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">Create</button>
-          <span id="userMsg" class="text-sm text-emerald-400"></span>
-        </form>
-      </section>
-
       <!-- Transactions Table -->
       <section class="bg-slate-800 rounded-2xl p-4 overflow-x-auto">
         <h2 class="font-semibold mb-3">📋 Transaction Log</h2>

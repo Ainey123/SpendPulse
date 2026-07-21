@@ -341,24 +341,41 @@ el("ocrBtn").addEventListener("click", async () => {
       
       if (!data.amount || parseFloat(data.amount) === 0 || !data.receiver_name) {
         if (pItem) {
-          pItem.innerHTML = `⚠️ <b>${file.name}</b> scanned, but amount/receiver is missing. (Did you set GEMINI_API_KEY?)`;
+          pItem.innerHTML = `⚠️ <b>${file.name}</b> scanned, but amount/receiver is missing. Saved anyway. (Set GEMINI_API_KEY for better extraction)`;
           pItem.classList.add("text-yellow-400");
         }
       } else {
         if (pItem) {
-          pItem.innerHTML = `✅ <b>${file.name}</b> scanned successfully!`;
+          pItem.innerHTML = `✅ <b>${file.name}</b> saved! (Sent PKR ${data.amount} to ${data.receiver_name})`;
           pItem.classList.add("text-emerald-400");
         }
       }
 
-      const scanData = {
-        ...data,
+      // Auto-save the transaction
+      const payload = {
+        reference_number: "AUTO-" + Date.now().toString().slice(-6) + "-" + i,
+        date: data.date || new Date().toISOString().slice(0, 10),
+        time: data.time || new Date().toISOString().slice(11, 16),
+        amount: data.amount || 0,
+        currency: data.currency || "PKR",
+        sender_name: data.sender_name || "Unknown",
+        sender_account: data.sender_account || "",
+        receiver_name: data.receiver_name || "Unknown",
+        receiver_account: data.receiver_account || "",
+        purpose: data.purpose || "Auto-extracted from screenshot",
+        transaction_type: data.transaction_type || "Bank Transfer",
         receipt_base64: b64,
-        _filename: file.name
       };
       
-      PENDING_SCANS.push(scanData);
-      successCount++;
+      const saveRes = await api("/api/transactions", "POST", payload);
+      if (saveRes.error) {
+        if (pItem) {
+          pItem.innerHTML = `❌ <b>${file.name}</b> save failed: ${saveRes.error}`;
+          pItem.classList.add("text-red-400");
+        }
+      } else {
+        successCount++;
+      }
     } catch (err) {
       if (pItem) {
         pItem.innerHTML = `❌ <b>${file.name}</b> error: ${err.message}`;
@@ -367,15 +384,14 @@ el("ocrBtn").addEventListener("click", async () => {
     }
   }
   
-  status.innerHTML = `Finished processing. ${successCount} out of ${files.length} ready for review.`;
+  status.innerHTML = `Finished processing. ${successCount} out of ${files.length} automatically saved.`;
   status.className = "text-sm text-emerald-400 mt-2 font-semibold";
   
   el("ocrFile").value = "";
   renderPendingScans();
   
-  if (PENDING_SCANS.length > 0 && CURRENT_PENDING_INDEX === -1) {
-    loadPendingScan(0);
-  }
+  await loadTransactions();
+  toast(`✅ Bulk upload complete (${successCount} saved)`);
 });
 
 el("txnForm").addEventListener("submit", async e => {

@@ -362,7 +362,7 @@ el("ocrBtn").addEventListener("click", async () => {
         receiver_account: data.receiver_account || "",
         purpose: data.purpose || "Auto-extracted from screenshot",
         transaction_type: data.transaction_type || "Bank Transfer",
-        receipt_base64: b64,
+        // We do not send receipt_base64 because Google Sheets has a 50,000 character limit per cell, which causes a 500 error!
       };
       
       const saveRes = await api("/api/transactions", "POST", payload);

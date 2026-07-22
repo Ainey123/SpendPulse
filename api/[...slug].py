@@ -717,9 +717,13 @@ def _app_inner(environ, start_response):
                 "spreadsheet_id": sid,
                 "sheet_access_error": sheet_err,
             }
-            return _json(200, dbg)
+            status, headers, body = _json(200, dbg)
+            start_response(status, headers)
+            return body
         except Exception as e:  # noqa: BLE001
-            return _json(500, {"error": f"debug failed: {type(e).__name__}: {e}"})
+            status, headers, body = _json(500, {"error": f"debug failed: {type(e).__name__}: {e}"})
+            start_response(status, headers)
+            return body
 
     if path in route_map:
         try:

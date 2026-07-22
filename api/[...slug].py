@@ -30,6 +30,16 @@ CONTACTS_COLUMNS = ["name", "phone", "account", "logged_by"]
 
 
 def _json(status, payload):
+    if isinstance(status, int):
+        status_map = {
+            200: "200 OK",
+            400: "400 Bad Request",
+            401: "401 Unauthorized",
+            403: "403 Forbidden",
+            404: "404 Not Found",
+            500: "500 Internal Server Error"
+        }
+        status = status_map.get(status, f"{status} Unknown")
     body = json.dumps(payload, default=str).encode("utf-8")
     return (
         status,
@@ -624,6 +634,7 @@ def handle_extract(environ):
     except Exception as e:  # noqa: BLE001
         if raw_text:
             fields = _extract_fields(raw_text)
+            fields["gemini_error"] = str(e)
         else:
             return _json(500, {
                 "error": f"Extraction failed: {e}",

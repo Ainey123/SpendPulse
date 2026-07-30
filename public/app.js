@@ -1,366 +1,564 @@
-// ============================================================
-// SpendPulse Frontend — vanilla JS SPA talking to /api backend
-// ============================================================
-const API = ""; // same-origin on Vercel
+const installBtn = document.getElementById('installBtn');
+let deferredPrompt = null;
 
-let TOKEN = localStorage.getItem("sp_token") || "";
-let CURRENT_USER = null;
-let ALL_TXNS = [];
-let ALL_CONTACTS = [];
-let PENDING_SCANS = [];
-let CURRENT_PENDING_INDEX = -1;
-let CURRENT_ROLE = "user";
-
-// ---------- helpers ----------
-function el(id) { return document.getElementById(id); }
-function toast(msg) {
-  const t = el("toast");
-  t.textContent = msg;
-  t.classList.remove("hidden");
-  setTimeout(() => t.classList.add("hidden"), 2500);
-}
-function authHeader() { return { "Content-Type": "application/json", Authorization: "Bearer " + TOKEN }; }
-
-async function api(path, method = "GET", body = null) {
-  const opts = { method, headers: authHeader() };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(API + path, opts);
-  let data = {};
-  try { data = await res.json(); } catch (_) {}
-  if (res.status === 401 && path !== "/api/login") {
-    logout();
-    return { error: "Session expired. Please login again." };
-  }
-  return data;
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
-function showError(id, msg) {
-  const e = el(id);
-  if (!msg) { e.classList.add("hidden"); return; }
-  e.textContent = msg;
-  e.classList.remove("hidden");
+// Convert any Base64 image (JPG, PNG, WebP, GIF, etc.) to PNG Uint8Array via Canvas
+async function imageBase64ToPngBytes(base64Str) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'Anonymous';
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error('Canvas toBlob failed'));
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(new Uint8Array(reader.result));
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(blob);
+            }, 'image/png');
+        };
+        img.onerror = (err) => reject(err);
+        img.src = base64Str;
+    });
 }
 
-// ---------- auth ----------
-async function login(user, pass) {
-  const data = await api("/api/login", "POST", { username: user, password: pass });
-  if (data.error) { showError("loginError", data.error); return; }
-  TOKEN = data.token;
-  CURRENT_USER = data.username;
-  CURRENT_ROLE = data.role;
-  localStorage.setItem("sp_token", TOKEN);
-  enterApp();
-}
-
-function logout() {
-  api("/api/logout", "POST").catch(() => {});
-  TOKEN = ""; CURRENT_USER = null; CURRENT_ROLE = "user";
-  localStorage.removeItem("sp_token");
-  el("appShell").classList.add("hidden");
-  el("loginScreen").classList.remove("hidden");
-}
-
-async function enterApp() {
-  CURRENT_ROLE = (CURRENT_ROLE || "user").toString().toLowerCase();
-  el("loginScreen").classList.add("hidden");
-  el("appShell").classList.remove("hidden");
-  el("userLabel").textContent = CURRENT_USER || "";
-  el("roleBadge").textContent = CURRENT_ROLE.toUpperCase();
-  const isAdmin = CURRENT_ROLE === "admin";
-  el("filterUser").classList.toggle("hidden", !isAdmin);
-  el("profileInfo").textContent = `Username: ${CURRENT_USER}    Role: ${CURRENT_ROLE}`;
-  if (isAdmin) {
+// Render PDF Page 1 to canvas and return PNG Uint8Array
+async function pdfBase64ToPngBytes(pdfBase64Str) {
     try {
-      const u = await api("/api/users/list");
-      if (u.users) {
-        el("filterUser").innerHTML = '<option value="">All users</option>' +
-          u.users.map(x => `<option value="${x.username}">${x.username}</option>`).join("");
-      }
-    } catch (_) {}
-  }
-  await loadContacts();
-  await loadTransactions();
-}
-
-async function loadContacts() {
-  const data = await api("/api/contacts");
-  if (!data.error && data.contacts) {
-    ALL_CONTACTS = data.contacts;
-    const list = el("receiversList");
-    if (list) {
-      list.innerHTML = ALL_CONTACTS.map(c => `<option value="${c.name}">${c.phone ? c.phone : ''}</option>`).join("");
-    }
-  }
-}
-
-// ---------- data ----------
-function matchesFilter(t) {
-  const mode = el("filterMode").value;
-  const d = t.date;
-  if (mode === "all") return true;
-  if (mode === "day") return d === el("filterDay").value;
-  if (mode === "month") {
-    const y = el("filterYear").value, m = el("filterMonth").value.padStart(2, "0");
-    return d.startsWith(`${y}-${m}`);
-  }
-  if (mode === "custom") {
-    const s = el("filterStart").value, e = el("filterEnd").value;
-    return d >= s && d <= e;
-  }
-  return true;
-}
-
-async function loadTransactions() {
-  const data = await api("/api/transactions");
-  CURRENT_ROLE = (data.role || CURRENT_ROLE || "user").toString().toLowerCase();
-  if (data.error) {
-    showError("filterError", "⚠️ Could not load transactions: " + data.error +
-      "  (Check that SPREADSHEET_ID and GOOGLE_CREDENTIALS are set, and the 'transactions' tab exists.)");
-    ALL_TXNS = [];
-    renderTable();
-    return;
-  }
-  ALL_TXNS = data.transactions || [];
-  renderTable();
-}
-
-function renderTable() {
-  const userFilter = el("filterUser").value;
-  let rows = ALL_TXNS.filter(matchesFilter);
-  if (CURRENT_ROLE === "admin" && userFilter) {
-    rows = rows.filter(r => r.logged_by === userFilter);
-  }
-  const total = rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-  const receivers = {};
-  rows.forEach(r => {
-    const name = (r.receiver_name || "Unknown").trim();
-    receivers[name] = (receivers[name] || 0) + (parseFloat(r.amount) || 0);
-  });
-  const numContacts = Object.keys(receivers).length;
-
-  el("summaryCards").innerHTML = `
-    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Total Sent</div><div class="text-xl font-bold">PKR ${total.toLocaleString(undefined, {minimumFractionDigits:2})}</div></div>
-    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Transactions</div><div class="text-xl font-bold">${rows.length}</div></div>
-    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Avg Amount</div><div class="text-xl font-bold">PKR ${rows.length ? (total/rows.length).toLocaleString(undefined,{minimumFractionDigits:2}) : "0.00"}</div></div>
-    <div class="bg-slate-800 rounded-2xl p-4"><div class="text-slate-400 text-xs">Total Contacts</div><div class="text-xl font-bold">${ALL_CONTACTS.length}</div></div>`;
-
-  el("contactBreakdown").innerHTML = Object.entries(receivers).map(([name, amount]) => `
-    <div class="bg-slate-800/50 border border-slate-700 rounded-xl p-3 flex justify-between items-center">
-      <div class="text-sm font-semibold truncate pr-2">${name}</div>
-      <div class="text-sm text-brand-400 font-bold whitespace-nowrap">PKR ${amount.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
-    </div>
-  `).join("");
-
-  const body = el("txnBody");
-  body.innerHTML = "";
-  el("emptyState").classList.toggle("hidden", rows.length > 0);
-  rows.forEach(r => {
-    const tr = document.createElement("tr");
-    tr.className = "hover:bg-slate-700/40";
-    const receipt = r.receipt_base64
-      ? `<button class="text-brand-400 underline" onclick="showReceipt('${encodeURIComponent(r.receipt_base64)}')">View</button>`
-      : "—";
-    const logged = CURRENT_ROLE === "admin" ? `<td class="px-2 py-2">${r.logged_by || ""}</td>` : "";
-    tr.innerHTML = `
-      <td class="px-2 py-2">${r.reference_number || ""}</td>
-      <td class="px-2 py-2">${r.date || ""}</td>
-      <td class="px-2 py-2">${r.time || ""}</td>
-      <td class="px-2 py-2 text-right">PKR ${(parseFloat(r.amount)||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-      <td class="px-2 py-2">${r.sender_name || ""}</td>
-      <td class="px-2 py-2">${r.receiver_name || ""}</td>
-      <td class="px-2 py-2">${r.purpose || ""}</td>
-      <td class="px-2 py-2">${r.transaction_type || ""}</td>
-      ${logged}
-      <td class="px-2 py-2">${receipt}</td>`;
-    body.appendChild(tr);
-  });
-  window.__filtered = rows;
-}
-
-window.showReceipt = function (b64) {
-  const img = "data:image/png;base64," + decodeURIComponent(b64).replace(/^data:.*,/, "");
-  const w = window.open("", "_blank");
-  w.document.write(`<img src="${img}" style="max-width:100%">`);
-};
-
-// ---------- CSV export ----------
-function downloadCSV() {
-  const rows = window.__filtered || [];
-  const cols = ["reference_number","date","time","amount","currency","sender_name","sender_account","receiver_name","receiver_account","purpose","transaction_type","receipt_base64","logged_by"];
-  const head = cols.join(",");
-  const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = rows.map(r => cols.map(c => esc(r[c])).join(","));
-  const csv = "﻿" + [head, ...lines].join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `spendpulse_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-// ---------- events ----------
-el("loginForm").addEventListener("submit", e => {
-  e.preventDefault();
-  showError("loginError", "");
-  login(el("loginUser").value.trim(), el("loginPass").value);
-});
-
-el("logoutBtn").addEventListener("click", logout);
-
-el("filterMode").addEventListener("change", () => {
-  const m = el("filterMode").value;
-  el("filterDay").classList.toggle("hidden", m !== "day");
-  el("filterMonthWrap").classList.toggle("hidden", m !== "month");
-  el("filterMonthWrap").classList.toggle("flex", m === "month");
-  el("filterCustomWrap").classList.toggle("hidden", m !== "custom");
-  el("filterCustomWrap").classList.toggle("flex", m === "custom");
-  renderTable();
-});
-
-el("applyFilter").addEventListener("click", renderTable);
-el("filterUser").addEventListener("change", renderTable);
-el("exportBtn").addEventListener("click", downloadCSV);
-
-// (receipt preview removed)
-
-async function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result.split(",")[1]);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-
-// ---------- OCR auto-extract flow ----------
-
-el("ocrBtn").addEventListener("click", async () => {
-  const files = el("ocrFile").files;
-  const status = el("ocrStatus");
-  const progress = el("ocrProgress");
-  if (!files || files.length === 0) { 
-    status.textContent = "Please choose at least one image first."; 
-    status.classList.remove("hidden"); 
-    return; 
-  }
-  
-  status.textContent = `⏳ Processing ${files.length} image(s)...`;
-  status.className = "text-sm text-slate-400 mt-2";
-  status.classList.remove("hidden");
-  el("ocrRaw").classList.add("hidden");
-  if (progress) {
-    progress.innerHTML = "";
-    progress.classList.remove("hidden");
-  }
-  
-  let successCount = 0;
-  
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    let pItem = null;
-    if (progress) {
-      pItem = document.createElement("div");
-      pItem.className = "text-xs text-slate-300 p-2 bg-slate-900 rounded";
-      pItem.textContent = `Scanning file ${i + 1}/${files.length}: ${file.name}...`;
-      progress.appendChild(pItem);
-    }
-    
-    try {
-      const b64 = await fileToBase64(file);
-      const data = await api("/api/extract", "POST", { image_base64: b64 });
-      
-      if (data.error) {
-        if (pItem) {
-          pItem.innerHTML = `❌ <b>${file.name}</b> failed: ${data.error}`;
-          pItem.classList.add("text-red-400");
-        }
-        continue;
-      }
-      
-      if (!data.amount || parseFloat(data.amount) === 0 || !data.receiver_name) {
-        if (pItem) {
-          pItem.innerHTML = `⚠️ <b>${file.name}</b> scanned, but amount/receiver is missing. Saved anyway. (Set GEMINI_API_KEY for better extraction)`;
-          pItem.classList.add("text-yellow-400");
-        }
-      } else {
-        if (pItem) {
-          pItem.innerHTML = `✅ <b>${file.name}</b> saved! (Sent PKR ${data.amount} to ${data.receiver_name})`;
-          pItem.classList.add("text-emerald-400");
-        }
-      }
-
-      // Auto-save the transaction
-      const payload = {
-        reference_number: "AUTO-" + Date.now().toString().slice(-6) + "-" + i,
-        date: data.date || new Date().toISOString().slice(0, 10),
-        time: data.time || new Date().toISOString().slice(11, 16),
-        amount: data.amount || 0,
-        currency: data.currency || "PKR",
-        sender_name: data.sender_name || "Unknown",
-        sender_account: data.sender_account || "",
-        receiver_name: data.receiver_name || "Unknown",
-        receiver_account: data.receiver_account || "",
-        purpose: data.purpose || "Auto-extracted from screenshot",
-        transaction_type: data.transaction_type || "Bank Transfer",
-        // We do not send receipt_base64 because Google Sheets has a 50,000 character limit per cell, which causes a 500 error!
-      };
-      
-      const saveRes = await api("/api/transactions", "POST", payload);
-      if (saveRes.error) {
-        if (pItem) {
-          pItem.innerHTML = `❌ <b>${file.name}</b> save failed: ${saveRes.error}`;
-          pItem.classList.add("text-red-400");
-        }
-      } else {
-        successCount++;
-      }
+        const pdfDoc = await pdfjsLib.getDocument(pdfBase64Str).promise;
+        const page = await pdfDoc.getPage(1);
+        const viewport = page.getViewport({ scale: 2.0 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+        
+        return new Promise((resolve, reject) => {
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error('Canvas toBlob failed for PDF'));
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(new Uint8Array(reader.result));
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(blob);
+            }, 'image/png');
+        });
     } catch (err) {
-      if (pItem) {
-        pItem.innerHTML = `❌ <b>${file.name}</b> error: ${err.message}`;
-        pItem.classList.add("text-red-400");
-      }
+        console.warn('Could not render PDF page to image:', err);
+        return null;
     }
-  }
-  
-  status.innerHTML = `Finished processing. ${successCount} out of ${files.length} automatically saved.`;
-  status.className = "text-sm text-emerald-400 mt-2 font-semibold";
-  
-  el("ocrFile").value = "";
-  
-  await loadTransactions();
-  toast(`✅ Bulk upload complete (${successCount} saved)`);
+}
+
+// Generate a complete PDF with extracted bill data + embedded picture
+async function generateReceiptPdf(data, imageBase64, pdfBase64) {
+    try {
+        const { PDFDocument, rgb, StandardFonts } = PDFLib;
+        const pdfDoc = await PDFDocument.create();
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+        let imgBytes = null;
+        if (imageBase64) {
+            try {
+                imgBytes = await imageBase64ToPngBytes(imageBase64);
+            } catch (e) {
+                console.warn('Canvas conversion failed, fallback to raw b64:', e);
+                const rawB64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+                imgBytes = Uint8Array.from(atob(rawB64), c => c.charCodeAt(0));
+            }
+        } else if (pdfBase64) {
+            imgBytes = await pdfBase64ToPngBytes(pdfBase64);
+        }
+
+        let embeddedImg = null;
+        if (imgBytes) {
+            try {
+                embeddedImg = await pdfDoc.embedPng(imgBytes);
+            } catch (err) {
+                console.warn('embedPng failed, trying embedJpg:', err);
+                try {
+                    embeddedImg = await pdfDoc.embedJpg(imgBytes);
+                } catch (e) {
+                    console.warn('Both embedPng and embedJpg failed:', e);
+                }
+            }
+        }
+
+        const pageWidth = 595.28; // A4 width
+        const pageHeight = 841.89; // A4 height
+        const page = pdfDoc.addPage([pageWidth, pageHeight]);
+
+        // 1. Top Header Banner
+        page.drawRectangle({
+            x: 0,
+            y: pageHeight - 70,
+            width: pageWidth,
+            height: 70,
+            color: rgb(0.31, 0.27, 0.9), // Indigo #4f46e5
+        });
+
+        page.drawText('SpendPulse - Bill Record & Receipt', {
+            x: 30,
+            y: pageHeight - 42,
+            size: 20,
+            font: fontBold,
+            color: rgb(1, 1, 1),
+        });
+
+        page.drawText('Verified Transaction Summary & Visual Proof', {
+            x: 30,
+            y: pageHeight - 58,
+            size: 10,
+            font: font,
+            color: rgb(0.85, 0.85, 1),
+        });
+
+        // 2. Data Card Box
+        const cardX = 30;
+        const cardY = pageHeight - 270;
+        const cardWidth = pageWidth - 60;
+        const cardHeight = 180;
+
+        page.drawRectangle({
+            x: cardX,
+            y: cardY,
+            width: cardWidth,
+            height: cardHeight,
+            color: rgb(0.97, 0.98, 1),
+            borderColor: rgb(0.8, 0.85, 0.95),
+            borderWidth: 1.5,
+        });
+
+        // Amount Header
+        const amtStr = data.amount ? `${data.amount} ${data.currency || 'PKR'}` : 'N/A';
+        page.drawText('TOTAL AMOUNT:', { x: cardX + 20, y: cardY + cardHeight - 28, size: 10, font: fontBold, color: rgb(0.3, 0.3, 0.4) });
+        page.drawText(amtStr, { x: cardX + 130, y: cardY + cardHeight - 32, size: 20, font: fontBold, color: rgb(0.02, 0.5, 0.34) });
+
+        // Record Grid
+        const records = [
+            { label: 'From (Sender):', val: data.sender_name || 'N/A' },
+            { label: 'To (Receiver):', val: data.receiver_name || 'N/A' },
+            { label: 'Date:', val: data.date || 'N/A' },
+            { label: 'Time:', val: data.time || 'N/A' },
+            { label: 'Reference / TRX:', val: data.reference_number || 'N/A' },
+            { label: 'Purpose:', val: data.purpose || 'Payment' },
+        ];
+
+        let rY = cardY + cardHeight - 65;
+        for (let i = 0; i < records.length; i += 2) {
+            const r1 = records[i];
+            const r2 = records[i + 1];
+
+            page.drawText(r1.label, { x: cardX + 20, y: rY, size: 10, font: fontBold, color: rgb(0.3, 0.3, 0.3) });
+            page.drawText(String(r1.val), { x: cardX + 130, y: rY, size: 10, font: font, color: rgb(0.1, 0.1, 0.1) });
+
+            if (r2) {
+                page.drawText(r2.label, { x: cardX + 280, y: rY, size: 10, font: fontBold, color: rgb(0.3, 0.3, 0.3) });
+                page.drawText(String(r2.val), { x: cardX + 390, y: rY, size: 10, font: font, color: rgb(0.1, 0.1, 0.1) });
+            }
+            rY -= 30;
+        }
+
+        // 3. Image Section Title
+        page.drawText('ATTACHED BILL / RECEIPT PICTURE:', {
+            x: 30,
+            y: cardY - 25,
+            size: 11,
+            font: fontBold,
+            color: rgb(0.2, 0.2, 0.2),
+        });
+
+        // 4. Draw Embedded Image
+        if (embeddedImg) {
+            const maxImgW = pageWidth - 60; // 535 pt
+            const maxImgH = cardY - 70;     // Height remaining
+
+            const scaleW = maxImgW / embeddedImg.width;
+            const scaleH = maxImgH / embeddedImg.height;
+            const scale = Math.min(scaleW, scaleH, 1.0);
+
+            const imgW = embeddedImg.width * scale;
+            const imgH = embeddedImg.height * scale;
+
+            const imgX = (pageWidth - imgW) / 2;
+            const imgY = cardY - 35 - imgH;
+
+            // Border box
+            page.drawRectangle({
+                x: imgX - 3,
+                y: imgY - 3,
+                width: imgW + 6,
+                height: imgH + 6,
+                color: rgb(0.95, 0.95, 0.95),
+                borderColor: rgb(0.8, 0.8, 0.8),
+                borderWidth: 1,
+            });
+
+            page.drawImage(embeddedImg, {
+                x: imgX,
+                y: imgY,
+                width: imgW,
+                height: imgH,
+            });
+        } else {
+            page.drawText('(No bill preview image available)', {
+                x: 30,
+                y: cardY - 50,
+                size: 10,
+                font: font,
+                color: rgb(0.5, 0.5, 0.5),
+            });
+        }
+
+        // Footer
+        page.drawText('SpendPulse Scanner • Automatic Bill Extraction & Archive', {
+            x: 30,
+            y: 15,
+            size: 8,
+            font: font,
+            color: rgb(0.5, 0.5, 0.5),
+        });
+
+        const pdfBytes = await pdfDoc.save();
+        return new Blob([pdfBytes], { type: 'application/pdf' });
+    } catch (err) {
+        console.error('PDF generation failed:', err);
+        return null;
+    }
+}
+
+// Download extracted bill record directly as CSV file
+function downloadCsv(data) {
+    const headers = ["Reference Number", "Date", "Time", "Amount", "Currency", "From", "To", "Purpose", "Transaction Type"];
+    const row = [
+        `"${data.reference_number || ''}"`,
+        `"${data.date || ''}"`,
+        `"${data.time || ''}"`,
+        `"${data.amount || ''}"`,
+        `"${data.currency || 'PKR'}"`,
+        `"${data.sender_name || ''}"`,
+        `"${data.receiver_name || ''}"`,
+        `"${data.purpose || 'Payment'}"`,
+        `"${data.transaction_type || 'Payment'}"`
+    ];
+
+    const csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + row.join(",");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    const filename = `Bill_${data.reference_number || 'Record'}_${data.date || 'Date'}.csv`;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
 });
 
-// profile
-el("profileBtn").addEventListener("click", () => el("profileModal").classList.remove("hidden"));
-el("closeProfile").addEventListener("click", () => el("profileModal").classList.add("hidden"));
-el("resetForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  showError("resetError", "");
-  const cur = el("curPass").value, n1 = el("newPass1").value, n2 = el("newPass2").value;
-  if (n1.length < 4) { showError("resetError", "Password must be at least 4 characters."); return; }
-  if (n1 !== n2) { showError("resetError", "Passwords do not match."); return; }
-  const data = await api("/api/reset-password", "POST", { current_password: cur, new_password: n1 });
-  if (data.error) { showError("resetError", data.error); return; }
-  toast("✅ Password updated");
-  el("resetForm").reset();
-  el("profileModal").classList.add("hidden");
+if (installBtn) {
+    installBtn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            deferredPrompt = null;
+        } else {
+            alert("📱 To install this app on your phone or computer:\n\n1. Open your browser menu (3 dots / Share button)\n2. Tap 'Add to Home Screen' or 'Install App'!");
+        }
+    });
+}
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const pdfDropzone = document.getElementById('pdfDropzone');
+const pdfInput = document.getElementById('pdfInput');
+const preview = document.getElementById('preview');
+const scanBtn = document.getElementById('scanBtn');
+const loading = document.getElementById('loading');
+const loadingStatus = document.getElementById('loadingStatus');
+const message = document.getElementById('message');
+
+let currentBase64 = null;
+let currentFileType = 'image';
+let currentPdfBase64 = null;
+
+dropzone.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', handleFile);
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.style.borderColor = '#4f46e5'; });
+dropzone.addEventListener('dragleave', () => dropzone.style.borderColor = '#9ca3af');
+dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.style.borderColor = '#9ca3af';
+    if (e.dataTransfer.files.length) handleFile({ target: { files: e.dataTransfer.files } });
 });
 
-// ---------- init ----------
-(function init() {
-  const today = new Date().toISOString().slice(0, 10);
-  el("filterDay").value = today;
-  el("filterStart").value = today.slice(0, 8) + "01";
-  el("filterEnd").value = today;
-  if (TOKEN) {
-    api("/api/me").then(d => {
-      if (d.username) { CURRENT_USER = d.username; CURRENT_ROLE = d.role; enterApp(); }
-      else logout();
-    }).catch(() => logout());
-  }
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
-  }
-})();
+pdfDropzone.addEventListener('click', () => pdfInput.click());
+pdfInput.addEventListener('change', handlePdfFile);
+pdfDropzone.addEventListener('dragover', (e) => { e.preventDefault(); pdfDropzone.style.borderColor = '#4f46e5'; });
+pdfDropzone.addEventListener('dragleave', () => pdfDropzone.style.borderColor = '#059669');
+pdfDropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    pdfDropzone.style.borderColor = '#059669';
+    if (e.dataTransfer.files.length) handlePdfFile({ target: { files: e.dataTransfer.files } });
+});
+
+function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        currentBase64 = event.target.result;
+        currentFileType = 'image';
+        preview.src = currentBase64;
+        preview.classList.remove('hidden');
+        scanBtn.classList.remove('hidden');
+        scanBtn.textContent = 'Upload & Save to Sheet';
+        dropzone.classList.add('hidden');
+        message.classList.add('hidden');
+    };
+    reader.readAsDataURL(file);
+}
+
+function handlePdfFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+        message.textContent = 'PDF too large (max 50MB).';
+        message.className = 'error';
+        message.classList.remove('hidden');
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        currentPdfBase64 = event.target.result;
+        currentFileType = 'pdf';
+        preview.classList.add('hidden');
+        scanBtn.classList.remove('hidden');
+        scanBtn.textContent = 'Upload PDF & Save to Sheet';
+        pdfDropzone.classList.add('hidden');
+        message.classList.add('hidden');
+    };
+    reader.readAsDataURL(file);
+}
+
+function parseReceiptText(text) {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    
+    let amount = "";
+    let currency = "PKR";
+    let sender_name = "";
+    let receiver_name = "";
+    let reference_number = "";
+    let date = "";
+    let time = "";
+
+    // 1. Amount Extraction (supports 30,000, 30000, 30k -> 30000, PKR 30,000, Rs 30000)
+    const amtMatch = text.match(/(?:PKR|RS|USD|EUR|\$)\s*([\d,]+(?:\.\d{2})?)/i) || 
+                     text.match(/\b([\d,]{3,}(?:\.\d{2})?)\b/);
+    if (amtMatch) {
+        amount = amtMatch[1].replace(/,/g, '');
+    }
+
+    // 2. Date Extraction (e.g., 22-Jul-2026, 30-Jul-2025, 22/07/2026, 2026-07-22, 22 Jul 2026)
+    const dateMatch = text.match(/\b(\d{1,2}[-/\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{1,2})[-/\s]\d{2,4})\b/i) ||
+                      text.match(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})\b/i);
+    if (dateMatch) {
+        date = dateMatch[1];
+    } else {
+        date = new Date().toISOString().split('T')[0];
+    }
+
+    // 3. Time Extraction (e.g., 05:26:35 PM, 05:26 PM, 17:25)
+    const timeMatch = text.match(/\b(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)\b/);
+    if (timeMatch) {
+        time = timeMatch[1];
+    } else {
+        time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // 4. Reference / Transaction ID
+    const refMatch = text.match(/(?:Ref|Reference|Txn|Transaction ID|TRX|ID)[:\s]*([A-Z0-9]{5,25})/i) ||
+                      text.match(/\b(\d{10,20})\b/);
+    if (refMatch) {
+        reference_number = refMatch[1];
+    }
+
+    // 5. Sender Name (From) & Receiver Name (To)
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        // Sender "From"
+        if (/^(From|Sender|Remitter|Paid By|Debited From)[:\s]*/i.test(line)) {
+            let val = line.replace(/^(From|Sender|Remitter|Paid By|Debited From)[:\s]*/i, '').trim();
+            if (!val && i + 1 < lines.length) val = lines[i+1];
+            if (val && !/^\d+$/.test(val) && !/Account|Bank|Balance/i.test(val)) sender_name = val;
+        }
+
+        // Receiver "To"
+        if (/^(To|Receiver|Beneficiary|Paid To|Credited To|Title)[:\s]*/i.test(line)) {
+            let val = line.replace(/^(To|Receiver|Beneficiary|Paid To|Credited To|Title)[:\s]*/i, '').trim();
+            if (!val && i + 1 < lines.length) val = lines[i+1];
+            if (val && !/^\d+$/.test(val) && !/Account|Bank|Balance/i.test(val)) receiver_name = val;
+        }
+    }
+
+    // Fallback name search if keywords were on separate lines
+    if (!receiver_name || !sender_name) {
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].toUpperCase() === "FROM" && i + 1 < lines.length) {
+                if (!sender_name) sender_name = lines[i+1];
+            }
+            if (lines[i].toUpperCase() === "TO" && i + 1 < lines.length) {
+                if (!receiver_name) receiver_name = lines[i+1];
+            }
+        }
+    }
+
+    return {
+        amount,
+        currency,
+        sender_name: sender_name || "Sender",
+        receiver_name: receiver_name || "Receiver",
+        reference_number,
+        date,
+        time,
+        raw_text: text
+    };
+}
+
+scanBtn.addEventListener('click', async () => {
+    scanBtn.classList.add('hidden');
+    loading.classList.remove('hidden');
+    message.classList.add('hidden');
+
+    let extractedData = null;
+    let endpoint = '/api/scan';
+    let bodyPayload = {};
+
+    if (currentFileType === 'pdf' && currentPdfBase64) {
+        loadingStatus.textContent = "Extracting text from PDF...";
+        // Use pdf.js to extract text client-side (no PDF bytes sent to server)
+        try {
+            const pdfDoc = await pdfjsLib.getDocument(currentPdfBase64).promise;
+            let fullText = "";
+            for (let i = 1; i <= Math.min(pdfDoc.numPages, 5); i++) {
+                const page = await pdfDoc.getPage(i);
+                const textContent = await page.getTextContent();
+                fullText += textContent.items.map(item => item.str).join(" ") + "\n";
+            }
+            extractedData = parseReceiptText(fullText);
+            bodyPayload = { extracted_data: extractedData };
+        } catch (err) {
+            console.warn("PDF text extraction failed:", err);
+            throw new Error("Could not read PDF text. Please try a different PDF.");
+        }
+    } else if (currentBase64) {
+        loadingStatus.textContent = "Scanning text from image...";
+        endpoint = '/api/scan';
+        try {
+            if (window.Tesseract) {
+                const worker = await Tesseract.createWorker('eng');
+                const ret = await worker.recognize(currentBase64);
+                await worker.terminate();
+                extractedData = parseReceiptText(ret.data.text);
+            }
+        } catch (err) {
+            console.warn("Client OCR failed, fallback to server:", err);
+        }
+        bodyPayload = { image_base64: currentBase64, extracted_data: extractedData };
+    } else {
+        loading.classList.add('hidden');
+        scanBtn.classList.remove('hidden');
+        message.textContent = 'No file selected.';
+        message.className = 'error';
+        message.classList.remove('hidden');
+        return;
+    }
+
+    loadingStatus.textContent = "Saving to Google Sheet...";
+
+    try {
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bodyPayload)
+        });
+        const data = await res.json();
+
+        loading.classList.add('hidden');
+
+        if (res.ok) {
+            const amt = data.amount ? `${data.amount} ${data.currency || 'PKR'}` : 'Saved';
+
+            loadingStatus.textContent = "Generating PDF document...";
+            const pdfBlob = await generateReceiptPdf(data, currentBase64, currentPdfBase64);
+            let pdfUrl = null;
+            if (pdfBlob) {
+                pdfUrl = URL.createObjectURL(pdfBlob);
+            } else if (currentPdfBase64) {
+                pdfUrl = currentPdfBase64;
+            }
+
+            message.innerHTML = `
+                <div style="margin-bottom: 12px; text-align: left; background: #ecfdf5; padding: 14px; border-radius: 8px; border: 1px solid #6ee7b7;">
+                    <strong style="color: #047857; font-size: 16px;">✅ Extracted & Saved to Spreadsheet!</strong><br/>
+                    <div style="font-size: 24px; color: #065f46; font-weight: bold; margin: 6px 0;">${amt}</div>
+                    <div style="font-size: 13px; color: #374151; line-height: 1.6;">
+                        ${data.sender_name ? `<b>From:</b> ${data.sender_name}<br/>` : ''}
+                        ${data.receiver_name ? `<b>To:</b> ${data.receiver_name}<br/>` : ''}
+                        ${data.date ? `<b>Date:</b> ${data.date} ${data.time || ''}<br/>` : ''}
+                        ${data.reference_number ? `<b>Ref ID:</b> ${data.reference_number}` : ''}
+                    </div>
+                </div>
+                <div class="button-group">
+                    ${pdfUrl ? `<a href="${pdfUrl}" target="_blank" class="action-btn pdf-btn">📄 Open PDF (Record & Picture)</a>` : ''}
+                    ${data.sheet_url ? `<a href="${data.sheet_url}" target="_blank" class="action-btn sheet-btn">📊 Open Google Sheet / Excel</a>` : ''}
+                    <button id="csvDownloadBtn" class="action-btn csv-btn">📥 Download CSV File</button>
+                </div>
+            `;
+            message.className = 'success';
+            message.classList.remove('hidden');
+
+            const csvBtn = document.getElementById('csvDownloadBtn');
+            if (csvBtn) {
+                csvBtn.addEventListener('click', () => downloadCsv(data));
+            }
+
+            setTimeout(() => {
+                currentBase64 = null;
+                currentPdfBase64 = null;
+                currentFileType = 'image';
+                preview.classList.add('hidden');
+                dropzone.classList.remove('hidden');
+                pdfDropzone.classList.remove('hidden');
+                fileInput.value = "";
+                pdfInput.value = "";
+            }, 60000);
+        } else {
+            throw new Error(data.error || 'Failed to scan and save');
+        }
+    } catch (err) {
+        loading.classList.add('hidden');
+        scanBtn.classList.remove('hidden');
+        message.textContent = err.message;
+        message.className = 'error';
+        message.classList.remove('hidden');
+    }
+});

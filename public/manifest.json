@@ -1,19 +1,16 @@
 {
-  "name": "SpendPulse - Financial Ledger",
+  "name": "SpendPulse Scanner",
   "short_name": "SpendPulse",
-  "description": "Secure multi-user financial ledger",
-  "start_url": "./index.html",
-  "scope": "./",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
-  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "description": "Scan receipts and save transactions directly to Google Sheets.",
   "icons": [
     {
-      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "https://cdn-icons-png.flaticon.com/512/2845/2845869.png",
+      "sizes": "512x512",
+      "type": "image/png"
     }
   ]
 }

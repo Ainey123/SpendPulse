@@ -6,6 +6,10 @@ __pycache__/
 
 # Secrets — NEVER commit real credentials
 .streamlit/secrets.toml
+tmp_*.json
+tmp_*.txt
+add_admin*.py
+deploy_script.py
 
 # Vercel build
 .vercel
@@ -15,3 +19,5 @@ __pycache__/
 .vscode/
 .idea/
 receipts/
+
+.env*

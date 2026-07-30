@@ -2,169 +2,48 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f172a" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <link rel="manifest" href="./manifest.json" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
-  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
-  <title>SpendPulse — Financial Ledger</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: { extend: { colors: { brand: { 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' } } } }
-    };
-  </script>
-  <style>
-    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-    .fade { animation: fade .25s ease; }
-    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SpendPulse Scanner</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#4f46e5" />
+  <!-- Tesseract.js for 100% reliable client-side OCR without API keys -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- pdf-lib for generating PDFs client-side -->
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen">
-  <!-- ================= LOGIN SCREEN ================= -->
-  <div id="loginScreen" class="min-h-screen flex items-center justify-center px-4">
-    <div class="w-full max-w-sm fade">
-      <div class="text-center mb-8">
-        <div class="text-5xl mb-2">💰</div>
-        <h1 class="text-2xl font-bold text-white">SpendPulse</h1>
-        <p class="text-slate-400 text-sm">Secure Financial Ledger</p>
-      </div>
-      <form id="loginForm" class="bg-slate-800 rounded-2xl shadow-xl p-6 space-y-4">
-        <div>
-          <label class="text-sm text-slate-300">Username</label>
-          <input id="loginUser" type="text" required autocomplete="username"
-            class="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 focus:ring-2 focus:ring-brand-500 outline-none" />
-        </div>
-        <div>
-          <label class="text-sm text-slate-300">Password</label>
-          <input id="loginPass" type="password" required autocomplete="current-password"
-            class="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 focus:ring-2 focus:ring-brand-500 outline-none" />
-        </div>
-        <div id="loginError" class="text-red-400 text-sm hidden"></div>
-        <button type="submit"
-          class="w-full bg-brand-600 hover:bg-brand-700 rounded-lg py-2 font-semibold transition">Sign In</button>
-        <p class="text-xs text-slate-500 text-center">Default admin: admin / admin123</p>
-      </form>
+<body>
+  <div class="container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <h1 style="margin: 0; font-size: 24px;">SpendPulse Scanner</h1>
+      <button id="installBtn" class="secondary-btn" style="width: auto; margin: 0; padding: 6px 12px; font-size: 13px;">📱 Download App</button>
     </div>
-  </div>
-
-  <!-- ================= APP SHELL ================= -->
-  <div id="appShell" class="hidden min-h-screen flex flex-col">
-    <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-      <div class="flex items-center gap-2">
-        <span class="text-2xl">💰</span>
-        <span class="font-bold text-lg">SpendPulse</span>
-        <span id="roleBadge" class="ml-2 text-xs px-2 py-0.5 rounded-full bg-brand-600"></span>
-      </div>
-      <div class="flex items-center gap-2">
-        <span id="userLabel" class="text-sm text-slate-300"></span>
-        <button id="profileBtn" class="text-sm px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">Profile</button>
-        <button id="logoutBtn" class="text-sm px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700">Logout</button>
-      </div>
-    </header>
-
-    <main class="flex-1 p-4 max-w-6xl w-full mx-auto space-y-6">
-      <!-- Summary Cards -->
-      <section id="summaryCards" class="grid grid-cols-1 sm:grid-cols-4 gap-4"></section>
-      <section id="contactBreakdown" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4"></section>
-
-      <!-- Filters -->
-      <section class="bg-slate-800 rounded-2xl p-4 space-y-4">
-        <div class="flex flex-wrap items-center gap-3">
-          <h2 class="font-semibold">Filters</h2>
-          <select id="filterMode" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm">
-            <option value="day">Daily</option>
-            <option value="month">Monthly</option>
-            <option value="custom">Custom Range</option>
-            <option value="all">All</option>
-          </select>
-          <input id="filterDay" type="date" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          <div id="filterMonthWrap" class="hidden items-center gap-2">
-            <input id="filterYear" type="number" min="2000" max="2100" value="2026" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm w-24" />
-            <input id="filterMonth" type="number" min="1" max="12" value="7" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm w-20" />
-          </div>
-          <div id="filterCustomWrap" class="hidden items-center gap-2">
-            <input id="filterStart" type="date" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-            <span class="text-slate-400">to</span>
-            <input id="filterEnd" type="date" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-          </div>
-          <select id="filterUser" class="hidden bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm"></select>
-          <button id="applyFilter" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">Apply</button>
-          <button id="exportBtn" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-2 rounded-lg text-sm font-semibold">⬇ Download CSV</button>
-        </div>
-        <div id="filterError" class="text-red-400 text-sm hidden"></div>
-      </section>
-
-      <!-- Auto-Extract from Screenshot -->
-      <section class="bg-slate-800 rounded-2xl p-4 border border-brand-600/40">
-        <h2 class="font-semibold mb-1">🤖 Auto-Extract & Bulk Upload</h2>
-        <p class="text-xs text-slate-400 mb-3">Upload multiple transaction screenshots. AI will extract details and queue them for your review.</p>
-        <div class="flex flex-wrap items-end gap-3">
-          <div class="flex-1 min-w-[220px]">
-            <input id="ocrFile" type="file" accept="image/*" multiple class="w-full text-sm text-slate-300" />
-          </div>
-          <button id="ocrBtn" type="button" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-semibold">⚡ Scan Images</button>
-        </div>
-        <div id="ocrStatus" class="text-sm text-slate-400 mt-2 hidden"></div>
-        <div id="ocrProgress" class="hidden mt-2 space-y-2"></div>
-        <div id="ocrRaw" class="hidden mt-2">
-          <details class="text-xs text-slate-500">
-            <summary class="cursor-pointer">Show extracted raw text</summary>
-            <pre id="ocrRawText" class="mt-1 whitespace-pre-wrap bg-slate-900 rounded p-2"></pre>
-          </details>
-        </div>
-      </section>
-
-      <!-- Pending Scans Queue -->
-      <section id="pendingScansSection" class="hidden bg-slate-800 rounded-2xl p-4 border border-yellow-600/40">
-        <h2 class="font-semibold mb-3 text-yellow-400">⏳ Pending Review (<span id="pendingCount">0</span>)</h2>
-        <p class="text-xs text-slate-400 mb-3">Click on a scanned transaction below to load it into the form for review and saving.</p>
-        <div id="pendingScansList" class="space-y-2 max-h-40 overflow-y-auto"></div>
-      </section>
-
-      <!-- Transactions Table -->
-      <section class="bg-slate-800 rounded-2xl p-4 overflow-x-auto">
-        <h2 class="font-semibold mb-3">📋 Transaction Log</h2>
-        <table class="w-full text-sm">
-          <thead class="text-slate-400 border-b border-slate-700">
-            <tr>
-              <th class="text-left py-2 px-2">Ref #</th><th class="text-left px-2">Date</th>
-              <th class="text-left px-2">Time</th><th class="text-right px-2">Amount</th>
-              <th class="text-left px-2">Sender</th><th class="text-left px-2">Receiver</th>
-              <th class="text-left px-2">Purpose</th><th class="text-left px-2">Type</th>
-              <th id="loggedByHead" class="text-left px-2 hidden">Logged By</th>
-              <th class="text-left px-2">Receipt</th>
-            </tr>
-          </thead>
-          <tbody id="txnBody" class="divide-y divide-slate-700"></tbody>
-        </table>
-        <div id="emptyState" class="text-center text-slate-500 py-8">No transactions found.</div>
-      </section>
-    </main>
-  </div>
-
-  <!-- ================= PROFILE MODAL ================= -->
-  <div id="profileModal" class="hidden fixed inset-0 bg-black/60 z-20 flex items-center justify-center px-4">
-    <div class="bg-slate-800 rounded-2xl p-6 w-full max-w-sm fade space-y-3">
-      <h2 class="text-lg font-semibold">👤 My Profile</h2>
-      <div id="profileInfo" class="text-sm text-slate-300"></div>
-      <form id="resetForm" class="space-y-2">
-        <input id="curPass" type="password" placeholder="Current Password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-        <input id="newPass1" type="password" placeholder="New Password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-        <input id="newPass2" type="password" placeholder="Confirm New Password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
-        <div id="resetError" class="text-red-400 text-sm hidden"></div>
-        <div class="flex gap-2">
-          <button type="submit" class="flex-1 bg-brand-600 hover:bg-brand-700 py-2 rounded-lg text-sm font-semibold">Update Password</button>
-          <button type="button" id="closeProfile" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded-lg text-sm">Close</button>
-        </div>
-      </form>
+    
+    <p style="font-size: 14px; margin-bottom: 16px;">Upload any receipt to extract its data and save it instantly to Google Sheets.</p>
+    
+    <div id="dropzone" class="dropzone">
+      <p>Drag & Drop an image here or click to select</p>
+      <input type="file" id="fileInput" accept="image/*" hidden />
     </div>
+
+    <div id="pdfDropzone" class="dropzone" style="border-color: #059669; margin-top: 12px;">
+      <p>📄 Drag & Drop a PDF bill here or click to select</p>
+      <input type="file" id="pdfInput" accept=".pdf" hidden />
+    </div>
+
+    <img id="preview" class="hidden" alt="Preview" />
+
+    <button id="scanBtn" class="primary-btn hidden">Upload & Save to Sheet</button>
+
+    <div id="loading" class="hidden">
+      <div class="spinner"></div>
+      <p id="loadingStatus">Reading text from image...</p>
+    </div>
+
+    <div id="message" class="hidden"></div>
   </div>
-
-  <div id="toast" class="hidden fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-700 px-4 py-2 rounded-lg text-sm shadow-lg z-30"></div>
-
-  <script src="./app.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+  <script src="app.js"></script>
 </body>
 </html>

@@ -199,12 +199,78 @@ def app(environ, start_response):
                 "Auto-Scanner"
             ]
             
+            force_save = data.get("force_save", False)
             ws, sid = get_google_sheet()
-            ws.append_row(row)
-
             sheet_url = f"https://docs.google.com/spreadsheets/d/{sid}"
             extracted["sheet_url"] = sheet_url
-            
+
+            # Duplicate Payment Check
+            if not force_save:
+                try:
+                    all_rows = ws.get_all_values()
+                    target_amt = str(extracted.get("amount", "")).replace(",", "").strip()
+                    target_rec = str(extracted.get("receiver_name", "")).strip().lower()
+                    target_send = str(extracted.get("sender_name", "")).strip().lower()
+                    target_ref = str(extracted.get("reference_number", "")).strip()
+
+                    duplicate_found = None
+                    if len(all_rows) > 1:
+                        for r in all_rows[1:]:
+                            if len(r) < 8:
+                                continue
+                            r_ref = str(r[0]).strip()
+                            r_date = str(r[1]).strip()
+                            r_time = str(r[2]).strip()
+                            r_amt = str(r[3]).replace(",", "").strip()
+                            r_send = str(r[5]).strip().lower()
+                            r_rec = str(r[7]).strip().lower()
+
+                            # 1. Match by Reference ID (if present in both)
+                            if target_ref and r_ref and target_ref == r_ref:
+                                duplicate_found = {
+                                    "date": r_date,
+                                    "time": r_time,
+                                    "amount": r[3],
+                                    "receiver_name": r[7] if r[7] else r[5],
+                                    "reference_number": r_ref
+                                }
+                                break
+
+                            # 2. Match by Amount AND (Receiver Name OR Sender Name)
+                            if target_amt and r_amt and target_amt == r_amt:
+                                name_match = False
+                                if target_rec and (target_rec == r_rec or target_rec in r_rec or r_rec in target_rec):
+                                    name_match = True
+                                elif target_send and (target_send == r_send or target_send in r_send or r_send in target_send):
+                                    name_match = True
+
+                                if name_match:
+                                    duplicate_found = {
+                                        "date": r_date,
+                                        "time": r_time,
+                                        "amount": r[3],
+                                        "receiver_name": r[7] if r[7] else r[5],
+                                        "reference_number": r_ref
+                                    }
+                                    break
+
+                    if duplicate_found:
+                        status, headers, res = _json(200, {
+                            "is_duplicate": True,
+                            "saved": False,
+                            "duplicate_info": duplicate_found,
+                            "extracted_data": extracted
+                        })
+                        start_response(status, headers)
+                        return res
+                except Exception as check_err:
+                    print("Duplicate check warning:", check_err)
+
+            # Save to Google Sheet
+            ws.append_row(row)
+            extracted["is_duplicate"] = False
+            extracted["saved"] = True
+
             status, headers, res = _json(200, extracted)
             start_response(status, headers)
             return res

@@ -42,6 +42,25 @@
 
     <div id="message" class="hidden"></div>
   </div>
+
+  <!-- Duplicate Warning Modal -->
+  <div id="duplicateModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="warning-icon">⚠️</span>
+        <h3>Duplicate Payment Detected</h3>
+      </div>
+      <p id="duplicateMessage" class="modal-body">
+        A transaction matching this amount and recipient was previously recorded.
+      </p>
+      <div id="duplicateDetails" class="duplicate-details-card"></div>
+      <div class="modal-actions">
+        <button id="continueSaveBtn" class="primary-btn continue-btn">Continue & Save</button>
+        <button id="cancelSaveBtn" class="secondary-btn cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
   <script src="app.js"></script>

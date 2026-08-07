@@ -505,52 +505,65 @@ scanBtn.addEventListener('click', async () => {
         loading.classList.add('hidden');
 
         if (res.ok) {
-            const amt = data.amount ? `${data.amount} ${data.currency || 'PKR'}` : 'Saved';
+            // Check if server detected duplicate payment
+            if (data.is_duplicate) {
+                loading.classList.add('hidden');
+                
+                const modal = document.getElementById('duplicateModal');
+                const detailsBox = document.getElementById('duplicateDetails');
+                const continueBtn = document.getElementById('continueSaveBtn');
+                const cancelBtn = document.getElementById('cancelSaveBtn');
 
-            loadingStatus.textContent = "Generating PDF document...";
-            const pdfBlob = await generateReceiptPdf(data, currentBase64, currentPdfBase64);
-            let pdfUrl = null;
-            if (pdfBlob) {
-                pdfUrl = URL.createObjectURL(pdfBlob);
-            } else if (currentPdfBase64) {
-                pdfUrl = currentPdfBase64;
+                const dup = data.duplicate_info || {};
+                detailsBox.innerHTML = `
+                    <strong>Previous Payment Record Found:</strong><br/>
+                    <b>Amount:</b> ${dup.amount || 'N/A'}<br/>
+                    <b>Recipient:</b> ${dup.receiver_name || 'N/A'}<br/>
+                    <b>Date:</b> ${dup.date || ''} ${dup.time || ''}<br/>
+                    ${dup.reference_number ? `<b>Ref ID:</b> ${dup.reference_number}` : ''}
+                `;
+
+                modal.classList.remove('hidden');
+
+                continueBtn.onclick = async () => {
+                    modal.classList.add('hidden');
+                    loading.classList.remove('hidden');
+                    loadingStatus.textContent = "Saving payment to Google Sheet...";
+                    
+                    try {
+                        const forcePayload = { ...bodyPayload, force_save: true };
+                        const forceRes = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(forcePayload)
+                        });
+                        const forceData = await forceRes.json();
+                        if (forceRes.ok) {
+                            await renderSuccessResult(forceData);
+                        } else {
+                            throw new Error(forceData.error || 'Failed to save transaction');
+                        }
+                    } catch (e) {
+                        loading.classList.add('hidden');
+                        scanBtn.classList.remove('hidden');
+                        message.textContent = e.message;
+                        message.className = 'error';
+                        message.classList.remove('hidden');
+                    }
+                };
+
+                cancelBtn.onclick = () => {
+                    modal.classList.add('hidden');
+                    scanBtn.classList.remove('hidden');
+                    message.textContent = '❌ Payment recording cancelled. Duplicate payment was not saved.';
+                    message.className = 'error';
+                    message.classList.remove('hidden');
+                };
+
+                return;
             }
 
-            message.innerHTML = `
-                <div style="margin-bottom: 12px; text-align: left; background: #ecfdf5; padding: 14px; border-radius: 8px; border: 1px solid #6ee7b7;">
-                    <strong style="color: #047857; font-size: 16px;">✅ Extracted & Saved to Spreadsheet!</strong><br/>
-                    <div style="font-size: 24px; color: #065f46; font-weight: bold; margin: 6px 0;">${amt}</div>
-                    <div style="font-size: 13px; color: #374151; line-height: 1.6;">
-                        ${data.sender_name ? `<b>From:</b> ${data.sender_name}<br/>` : ''}
-                        ${data.receiver_name ? `<b>To:</b> ${data.receiver_name}<br/>` : ''}
-                        ${data.date ? `<b>Date:</b> ${data.date} ${data.time || ''}<br/>` : ''}
-                        ${data.reference_number ? `<b>Ref ID:</b> ${data.reference_number}` : ''}
-                    </div>
-                </div>
-                <div class="button-group">
-                    ${pdfUrl ? `<a href="${pdfUrl}" target="_blank" class="action-btn pdf-btn">📄 Open PDF (Record & Picture)</a>` : ''}
-                    ${data.sheet_url ? `<a href="${data.sheet_url}" target="_blank" class="action-btn sheet-btn">📊 Open Google Sheet / Excel</a>` : ''}
-                    <button id="csvDownloadBtn" class="action-btn csv-btn">📥 Download CSV File</button>
-                </div>
-            `;
-            message.className = 'success';
-            message.classList.remove('hidden');
-
-            const csvBtn = document.getElementById('csvDownloadBtn');
-            if (csvBtn) {
-                csvBtn.addEventListener('click', () => downloadCsv(data));
-            }
-
-            setTimeout(() => {
-                currentBase64 = null;
-                currentPdfBase64 = null;
-                currentFileType = 'image';
-                preview.classList.add('hidden');
-                dropzone.classList.remove('hidden');
-                pdfDropzone.classList.remove('hidden');
-                fileInput.value = "";
-                pdfInput.value = "";
-            }, 60000);
+            await renderSuccessResult(data);
         } else {
             throw new Error(data.error || 'Failed to scan and save');
         }
@@ -562,3 +575,54 @@ scanBtn.addEventListener('click', async () => {
         message.classList.remove('hidden');
     }
 });
+
+async function renderSuccessResult(data) {
+    loading.classList.add('hidden');
+    const amt = data.amount ? `${data.amount} ${data.currency || 'PKR'}` : 'Saved';
+
+    loadingStatus.textContent = "Generating PDF document...";
+    const pdfBlob = await generateReceiptPdf(data, currentBase64, currentPdfBase64);
+    let pdfUrl = null;
+    if (pdfBlob) {
+        pdfUrl = URL.createObjectURL(pdfBlob);
+    } else if (currentPdfBase64) {
+        pdfUrl = currentPdfBase64;
+    }
+
+    message.innerHTML = `
+        <div style="margin-bottom: 12px; text-align: left; background: #ecfdf5; padding: 14px; border-radius: 8px; border: 1px solid #6ee7b7;">
+            <strong style="color: #047857; font-size: 16px;">✅ Extracted & Saved to Spreadsheet!</strong><br/>
+            <div style="font-size: 24px; color: #065f46; font-weight: bold; margin: 6px 0;">${amt}</div>
+            <div style="font-size: 13px; color: #374151; line-height: 1.6;">
+                ${data.sender_name ? `<b>From:</b> ${data.sender_name}<br/>` : ''}
+                ${data.receiver_name ? `<b>To:</b> ${data.receiver_name}<br/>` : ''}
+                ${data.date ? `<b>Date:</b> ${data.date} ${data.time || ''}<br/>` : ''}
+                ${data.reference_number ? `<b>Ref ID:</b> ${data.reference_number}` : ''}
+            </div>
+        </div>
+        <div class="button-group">
+            ${pdfUrl ? `<a href="${pdfUrl}" target="_blank" class="action-btn pdf-btn">📄 Open PDF (Record & Picture)</a>` : ''}
+            ${data.sheet_url ? `<a href="${data.sheet_url}" target="_blank" class="action-btn sheet-btn">📊 Open Google Sheet / Excel</a>` : ''}
+            <button id="csvDownloadBtn" class="action-btn csv-btn">📥 Download CSV File</button>
+        </div>
+    `;
+    message.className = 'success';
+    message.classList.remove('hidden');
+
+    const csvBtn = document.getElementById('csvDownloadBtn');
+    if (csvBtn) {
+        csvBtn.addEventListener('click', () => downloadCsv(data));
+    }
+
+    setTimeout(() => {
+        currentBase64 = null;
+        currentPdfBase64 = null;
+        currentFileType = 'image';
+        preview.classList.add('hidden');
+        dropzone.classList.remove('hidden');
+        pdfDropzone.classList.remove('hidden');
+        fileInput.value = "";
+        pdfInput.value = "";
+    }, 60000);
+}
+

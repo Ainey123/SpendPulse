@@ -12,11 +12,17 @@ let empImageBatch = [];
 // Currently selected transaction for status update
 let selectedTxId = null;
 
+// Ledger Statement Cache
+let allLedgerTransactions = [];
+const DEFAULT_OPENING_BALANCE = 1000000.00;
+
 // Initialize App
 document.addEventListener("DOMContentLoaded", () => {
     initAuthView();
     initPinPad();
     initMultiImageDropzones();
+    initAdminSubTabs();
+    initLedgerFilters();
     checkExistingSession();
 });
 
@@ -97,7 +103,49 @@ function showEmployeeView() {
 }
 
 // -------------------------------------------------------------
-// 2. AUTHENTICATION & PIN KEYPAD CONTROLLER
+// 2. ADMIN SUB-PANEL NAVIGATION
+// -------------------------------------------------------------
+function initAdminSubTabs() {
+    const tabOverview = document.getElementById("adminTabOverview");
+    const tabLedger = document.getElementById("adminTabLedger");
+    const tabTeam = document.getElementById("adminTabTeam");
+
+    const panelOverview = document.getElementById("adminOverviewPanel");
+    const panelLedger = document.getElementById("adminLedgerPanel");
+    const panelTeam = document.getElementById("adminTeamPanel");
+
+    tabOverview.onclick = () => {
+        tabOverview.className = "auth-tab active";
+        tabLedger.className = "auth-tab";
+        tabTeam.className = "auth-tab";
+        panelOverview.classList.remove("hidden");
+        panelLedger.classList.add("hidden");
+        panelTeam.classList.add("hidden");
+    };
+
+    tabLedger.onclick = () => {
+        tabOverview.className = "auth-tab";
+        tabLedger.className = "auth-tab active";
+        tabTeam.className = "auth-tab";
+        panelOverview.classList.add("hidden");
+        panelLedger.classList.remove("hidden");
+        panelTeam.classList.add("hidden");
+        loadBankLedgerStatement();
+    };
+
+    tabTeam.onclick = () => {
+        tabOverview.className = "auth-tab";
+        tabLedger.className = "auth-tab";
+        tabTeam.className = "auth-tab active";
+        panelOverview.classList.add("hidden");
+        panelLedger.classList.add("hidden");
+        panelTeam.classList.remove("hidden");
+        fetchEmployeesList();
+    };
+}
+
+// -------------------------------------------------------------
+// 3. AUTHENTICATION & PIN KEYPAD CONTROLLER
 // -------------------------------------------------------------
 function initAuthView() {
     const tabAdmin = document.getElementById("tabAdmin");
@@ -215,12 +263,6 @@ async function handleLoginSubmit(e) {
         return;
     }
 
-    if (currentPin.length < 4 && !password) {
-        errBox.textContent = "Please enter your 4-digit security PIN or password.";
-        errBox.classList.remove("hidden");
-        return;
-    }
-
     try {
         const res = await fetch("/api/login", {
             method: "POST",
@@ -253,7 +295,7 @@ async function handleLoginSubmit(e) {
 }
 
 // -------------------------------------------------------------
-// 3. ADMIN DASHBOARD & EMPLOYEE MANAGEMENT CONTROLLER
+// 4. ADMIN DASHBOARD & EMPLOYEE MANAGEMENT CONTROLLER
 // -------------------------------------------------------------
 async function loadAdminDashboard() {
     fetchDashboardStats();
@@ -286,8 +328,9 @@ async function fetchEmployeesList() {
             const data = await res.json();
             const users = data.users || [];
             
-            // Populate Employee Table
-            const tbody = document.getElementById("employeeTableBody");
+            // Populate Employee Tables & Selects
+            const tbody1 = document.getElementById("employeeTableBody");
+            const tbody2 = document.getElementById("employeeTableBody2");
             const select = document.getElementById("adminAssignSelect");
             const modalSelect = document.getElementById("modalEmpSelect");
 
@@ -295,13 +338,14 @@ async function fetchEmployeesList() {
             modalSelect.innerHTML = `<option value="">Unassigned</option>`;
 
             if (users.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #94a3b8;">No registered employees found.</td></tr>`;
+                const emptyRow = `<tr><td colspan="7" style="text-align: center; color: #94a3b8;">No registered employees found.</td></tr>`;
+                if (tbody1) tbody1.innerHTML = emptyRow;
+                if (tbody2) tbody2.innerHTML = emptyRow;
                 return;
             }
 
             let html = "";
             users.forEach(u => {
-                // Populate dropdown options
                 const opt = `<option value="${u.user_id}">${u.name} (@${u.username})</option>`;
                 select.innerHTML += opt;
                 modalSelect.innerHTML += opt;
@@ -320,7 +364,9 @@ async function fetchEmployeesList() {
                     </tr>
                 `;
             });
-            tbody.innerHTML = html;
+
+            if (tbody1) tbody1.innerHTML = html;
+            if (tbody2) tbody2.innerHTML = html;
         }
     } catch (e) {
         console.warn("Users fetch failed:", e);
@@ -328,52 +374,62 @@ async function fetchEmployeesList() {
 }
 
 function initAdminFormEvents() {
-    const toggleBtn = document.getElementById("toggleCreateEmpBtn");
-    const form = document.getElementById("createEmpForm");
-    
-    toggleBtn.onclick = () => form.classList.toggle("hidden");
+    const bindForm = (toggleId, formId, nameId, unameId, pinId, passId, autoBtnId, msgId) => {
+        const toggleBtn = document.getElementById(toggleId);
+        const form = document.getElementById(formId);
+        if (!toggleBtn || !form) return;
 
-    document.getElementById("autoGenCredentialsBtn").onclick = () => {
-        const randPin = Math.floor(1000 + Math.random() * 9000).toString();
-        const randPass = "Emp#" + Math.floor(1000 + Math.random() * 9000);
-        document.getElementById("newEmpPin").value = randPin;
-        document.getElementById("newEmpPassword").value = randPass;
-    };
+        toggleBtn.onclick = () => form.classList.toggle("hidden");
 
-    form.onsubmit = async (e) => {
-        e.preventDefault();
-        const name = document.getElementById("newEmpName").value.trim();
-        const username = document.getElementById("newEmpUsername").value.trim();
-        const pin_code = document.getElementById("newEmpPin").value.trim();
-        const password = document.getElementById("newEmpPassword").value.trim();
-        const msg = document.getElementById("createEmpMsg");
-
-        try {
-            const res = await fetch("/api/users", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, username, pin_code, password, role: "employee" })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                msg.textContent = "✅ Employee created successfully!";
-                msg.className = "success";
-                msg.classList.remove("hidden");
-                form.reset();
-                fetchEmployeesList();
-                fetchDashboardStats();
-                setTimeout(() => msg.classList.add("hidden"), 4000);
-            } else {
-                throw new Error(data.error || "Failed to create user");
-            }
-        } catch (err) {
-            msg.textContent = err.message;
-            msg.className = "error";
-            msg.classList.remove("hidden");
+        const autoBtn = document.getElementById(autoBtnId);
+        if (autoBtn) {
+            autoBtn.onclick = () => {
+                const randPin = Math.floor(1000 + Math.random() * 9000).toString();
+                const randPass = "Emp#" + Math.floor(1000 + Math.random() * 9000);
+                document.getElementById(pinId).value = randPin;
+                document.getElementById(passId).value = randPass;
+            };
         }
+
+        form.onsubmit = async (e) => {
+            e.preventDefault();
+            const name = document.getElementById(nameId).value.trim();
+            const username = document.getElementById(unameId).value.trim();
+            const pin_code = document.getElementById(pinId).value.trim();
+            const password = document.getElementById(passId).value.trim();
+            const msg = document.getElementById(msgId);
+
+            try {
+                const res = await fetch("/api/users", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name, username, pin_code, password, role: "employee" })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    msg.textContent = "✅ Employee created successfully!";
+                    msg.className = "success";
+                    msg.classList.remove("hidden");
+                    form.reset();
+                    fetchEmployeesList();
+                    fetchDashboardStats();
+                    setTimeout(() => msg.classList.add("hidden"), 4000);
+                } else {
+                    throw new Error(data.error || "Failed to create user");
+                }
+            } catch (err) {
+                msg.textContent = err.message;
+                msg.className = "error";
+                msg.classList.remove("hidden");
+            }
+        };
     };
 
-    document.getElementById("refreshAdminTableBtn").onclick = () => fetchAdminTransactions();
+    bindForm("toggleCreateEmpBtn", "createEmpForm", "newEmpName", "newEmpUsername", "newEmpPin", "newEmpPassword", "autoGenCredentialsBtn", "createEmpMsg");
+    bindForm("toggleCreateEmpBtn2", "createEmpForm2", "newEmpName2", "newEmpUsername2", "newEmpPin2", "newEmpPassword2", "autoGenCredentialsBtn2", "createEmpMsg2");
+
+    const refBtn = document.getElementById("refreshAdminTableBtn");
+    if (refBtn) refBtn.onclick = () => fetchAdminTransactions();
 }
 
 async function deleteEmployee(userId, name) {
@@ -403,6 +459,7 @@ async function fetchAdminTransactions() {
         if (res.ok) {
             const data = await res.json();
             const txs = data.transactions || [];
+            allLedgerTransactions = txs;
 
             if (txs.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #94a3b8;">No task or payment records found.</td></tr>`;
@@ -455,11 +512,236 @@ function getStatusPill(st) {
 }
 
 // -------------------------------------------------------------
-// 4. EMPLOYEE DASHBOARD CONTROLLER
+// 5. CONTINUOUS BANK LEDGER STATEMENT CONTROLLER (MATCHES USER EXCEL REFERENCE)
+// -------------------------------------------------------------
+async function loadBankLedgerStatement() {
+    if (allLedgerTransactions.length === 0) {
+        try {
+            const res = await fetch("/api/transactions?role=admin");
+            if (res.ok) {
+                const data = await res.json();
+                allLedgerTransactions = data.transactions || [];
+            }
+        } catch (e) {
+            console.warn("Ledger fetch failed:", e);
+        }
+    }
+
+    populateMonthTenureSelect();
+    renderBankLedgerTable();
+}
+
+function initLedgerFilters() {
+    const searchInput = document.getElementById("ledgerSearchInput");
+    const monthSelect = document.getElementById("ledgerMonthSelect");
+    const dateFrom = document.getElementById("ledgerDateFrom");
+    const dateTo = document.getElementById("ledgerDateTo");
+    const resetBtn = document.getElementById("resetLedgerBtn");
+    const exportBtn = document.getElementById("exportLedgerCsvBtn");
+
+    if (searchInput) searchInput.oninput = renderBankLedgerTable;
+    if (monthSelect) monthSelect.onchange = renderBankLedgerTable;
+    if (dateFrom) dateFrom.onchange = renderBankLedgerTable;
+    if (dateTo) dateTo.onchange = renderBankLedgerTable;
+
+    if (resetBtn) {
+        resetBtn.onclick = () => {
+            if (searchInput) searchInput.value = "";
+            if (monthSelect) monthSelect.value = "all";
+            if (dateFrom) dateFrom.value = "";
+            if (dateTo) dateTo.value = "";
+            renderBankLedgerTable();
+        };
+    }
+
+    if (exportBtn) {
+        exportBtn.onclick = exportLedgerToCsv;
+    }
+}
+
+function populateMonthTenureSelect() {
+    const monthSelect = document.getElementById("ledgerMonthSelect");
+    if (!monthSelect) return;
+
+    const monthsSet = new Set();
+    allLedgerTransactions.forEach(t => {
+        if (t.date) {
+            try {
+                const d = new Date(t.date);
+                if (!isNaN(d.getTime())) {
+                    const mName = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+                    monthsSet.add(mName);
+                }
+            } catch (e) {}
+        }
+    });
+
+    let optHtml = `<option value="all">All Months (Continuous Ledger)</option>`;
+    monthsSet.forEach(m => {
+        optHtml += `<option value="${m}">${m}</option>`;
+    });
+    monthSelect.innerHTML = optHtml;
+}
+
+function renderBankLedgerTable() {
+    const tbody = document.getElementById("bankLedgerTableBody");
+    if (!tbody) return;
+
+    const searchQuery = (document.getElementById("ledgerSearchInput")?.value || "").toLowerCase().trim();
+    const selectedMonth = document.getElementById("ledgerMonthSelect")?.value || "all";
+    const dateFromStr = document.getElementById("ledgerDateFrom")?.value || "";
+    const dateToStr = document.getElementById("ledgerDateTo")?.value || "";
+
+    // Sort transactions chronologically (oldest to newest for continuous ledger)
+    const sorted = [...allLedgerTransactions].sort((a, b) => {
+        const da = new Date(a.date + " " + (a.time || "00:00"));
+        const db = new Date(b.date + " " + (b.time || "00:00"));
+        return da - db;
+    });
+
+    let currentBalance = DEFAULT_OPENING_BALANCE;
+    let openingBalForFilter = DEFAULT_OPENING_BALANCE;
+    let totalDebit = 0.0;
+    let totalCredit = 0.0;
+
+    let rowsHtml = "";
+    let lastMonthHeader = "";
+    let renderedCount = 0;
+
+    // Line-by-line ledger calculation
+    sorted.forEach((t, idx) => {
+        const amtStr = strToFloat(t.amount);
+        const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
+        
+        const debitVal = isCredit ? 0.0 : amtStr;
+        const creditVal = isCredit ? amtStr : 0.0;
+
+        currentBalance = currentBalance - debitVal + creditVal;
+
+        // Date formatting & Month boundary header
+        let tDateObj = new Date(t.date);
+        let monthHeaderStr = "";
+        let formattedDate = t.date;
+
+        if (!isNaN(tDateObj.getTime())) {
+            monthHeaderStr = tDateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+            formattedDate = tDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        }
+
+        // Apply Search & Tenure filters
+        let matches = true;
+
+        if (searchQuery) {
+            const particulars = `${t.sender_name} ${t.receiver_name} ${t.purpose} ${t.transaction_type} ${t.reference_number}`.toLowerCase();
+            if (!particulars.includes(searchQuery)) matches = false;
+        }
+
+        if (selectedMonth !== "all" && monthHeaderStr) {
+            const shortM = tDateObj.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+            if (shortM !== selectedMonth) matches = false;
+        }
+
+        if (dateFromStr) {
+            if (new Date(t.date) < new Date(dateFromStr)) matches = false;
+        }
+
+        if (dateToStr) {
+            if (new Date(t.date) > new Date(dateToStr)) matches = false;
+        }
+
+        if (matches) {
+            renderedCount++;
+            totalDebit += debitVal;
+            totalCredit += creditVal;
+
+            // Render month boundary divider row when month changes!
+            if (monthHeaderStr && monthHeaderStr !== lastMonthHeader) {
+                lastMonthHeader = monthHeaderStr;
+                rowsHtml += `
+                    <tr class="month-divider-row">
+                        <td colspan="6">🗓️ --- ${monthHeaderStr.toUpperCase()} STATEMENT TENURE ---</td>
+                    </tr>
+                `;
+            }
+
+            const particularsText = t.purpose || `POS SALE / PAYMENT TO ${t.receiver_name || t.sender_name || 'MERCHANT'}`;
+            const instNo = t.reference_number || t.id;
+
+            rowsHtml += `
+                <tr>
+                    <td style="font-weight: 600;">${formattedDate}</td>
+                    <td><b>${particularsText}</b> ${t.sender_name ? `<br/><span style="font-size: 11px; color: #94a3b8;">From: ${t.sender_name} | To: ${t.receiver_name || 'N/A'}</span>` : ''}</td>
+                    <td><code>${instNo}</code></td>
+                    <td class="debit-val" style="text-align: right;">${debitVal > 0 ? debitVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                    <td class="credit-val" style="text-align: right;">${creditVal > 0 ? creditVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                    <td class="running-bal" style="text-align: right;">${currentBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                </tr>
+            `;
+        }
+    });
+
+    if (renderedCount === 0) {
+        rowsHtml = `<tr><td colspan="6" style="text-align: center; color: #94a3b8;">No statement transactions match the selected tenure or search filter.</td></tr>`;
+    }
+
+    tbody.innerHTML = rowsHtml;
+
+    // Update Summary Header Cards
+    document.getElementById("ledgerOpeningBal").textContent = `PKR ${DEFAULT_OPENING_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    document.getElementById("ledgerTotalDebit").textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    document.getElementById("ledgerTotalCredit").textContent = `PKR ${totalCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    document.getElementById("ledgerClosingBal").textContent = `PKR ${currentBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+}
+
+function strToFloat(val) {
+    if (!val) return 0.0;
+    const num = parseFloat(String(val).replace(/,/g, "").trim());
+    return isNaN(num) ? 0.0 : num;
+}
+
+function exportLedgerToCsv() {
+    if (allLedgerTransactions.length === 0) {
+        alert("No ledger statement data available to export.");
+        return;
+    }
+
+    let csvContent = "DATE,PARTICULARS,INST NO / REF,DEBIT,CREDIT,RUNNING BALANCE\n";
+    let curBal = DEFAULT_OPENING_BALANCE;
+
+    const sorted = [...allLedgerTransactions].sort((a, b) => {
+        const da = new Date(a.date + " " + (a.time || "00:00"));
+        const db = new Date(b.date + " " + (b.time || "00:00"));
+        return da - db;
+    });
+
+    sorted.forEach(t => {
+        const amtStr = strToFloat(t.amount);
+        const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
+        const debitVal = isCredit ? 0.0 : amtStr;
+        const creditVal = isCredit ? amtStr : 0.0;
+        curBal = curBal - debitVal + creditVal;
+
+        const particulars = `"${(t.purpose || t.receiver_name || 'POS Sale').replace(/"/g, '""')}"`;
+        const ref = `"${(t.reference_number || t.id).replace(/"/g, '""')}"`;
+
+        csvContent += `${t.date},${particulars},${ref},${debitVal},${creditVal},${curBal}\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `SpendPulse_Bank_Ledger_Statement_${new Date().toISOString().slice(0,10)}.csv`;
+    link.click();
+}
+
+// -------------------------------------------------------------
+// 6. EMPLOYEE DASHBOARD CONTROLLER
 // -------------------------------------------------------------
 async function loadEmployeeDashboard() {
     fetchEmployeeTransactions();
-    document.getElementById("refreshEmpTableBtn").onclick = () => fetchEmployeeTransactions();
+    const refEmpBtn = document.getElementById("refreshEmpTableBtn");
+    if (refEmpBtn) refEmpBtn.onclick = () => fetchEmployeeTransactions();
 }
 
 async function fetchEmployeeTransactions() {
@@ -473,7 +755,6 @@ async function fetchEmployeeTransactions() {
             const data = await res.json();
             const txs = data.transactions || [];
 
-            // Compute Employee Summary Cards
             let assignedCount = txs.length;
             let pendingCount = 0;
             let completedCount = 0;
@@ -526,44 +807,50 @@ async function fetchEmployeeTransactions() {
 }
 
 // -------------------------------------------------------------
-// 5. MULTI-IMAGE DROPZONES & PREVIEWS
+// 7. MULTI-IMAGE DROPZONES & PREVIEWS
 // -------------------------------------------------------------
 function initMultiImageDropzones() {
-    // Admin Dropzone
     const adminDropzone = document.getElementById("adminDropzone");
     const adminFileInput = document.getElementById("adminFileInput");
     const adminUploadBtn = document.getElementById("adminUploadBtn");
 
-    adminDropzone.onclick = () => adminFileInput.click();
-    adminFileInput.onchange = (e) => handleImageFiles(e.target.files, "admin");
+    if (adminDropzone && adminFileInput) {
+        adminDropzone.onclick = () => adminFileInput.click();
+        adminFileInput.onchange = (e) => handleImageFiles(e.target.files, "admin");
 
-    adminDropzone.ondragover = (e) => { e.preventDefault(); adminDropzone.style.borderColor = "#6366f1"; };
-    adminDropzone.ondragleave = () => adminDropzone.style.borderColor = "rgba(99, 102, 241, 0.4)";
-    adminDropzone.ondrop = (e) => {
-        e.preventDefault();
-        adminDropzone.style.borderColor = "rgba(99, 102, 241, 0.4)";
-        if (e.dataTransfer.files.length) handleImageFiles(e.dataTransfer.files, "admin");
-    };
+        adminDropzone.ondragover = (e) => { e.preventDefault(); adminDropzone.style.borderColor = "#6366f1"; };
+        adminDropzone.ondragleave = () => adminDropzone.style.borderColor = "rgba(99, 102, 241, 0.4)";
+        adminDropzone.ondrop = (e) => {
+            e.preventDefault();
+            adminDropzone.style.borderColor = "rgba(99, 102, 241, 0.4)";
+            if (e.dataTransfer.files.length) handleImageFiles(e.dataTransfer.files, "admin");
+        };
+    }
 
-    adminUploadBtn.onclick = () => submitImageBatch("admin");
+    if (adminUploadBtn) {
+        adminUploadBtn.onclick = () => submitImageBatch("admin");
+    }
 
-    // Employee Dropzone
     const empDropzone = document.getElementById("empDropzone");
     const empFileInput = document.getElementById("empFileInput");
     const empUploadBtn = document.getElementById("empUploadBtn");
 
-    empDropzone.onclick = () => empFileInput.click();
-    empFileInput.onchange = (e) => handleImageFiles(e.target.files, "employee");
+    if (empDropzone && empFileInput) {
+        empDropzone.onclick = () => empFileInput.click();
+        empFileInput.onchange = (e) => handleImageFiles(e.target.files, "employee");
 
-    empDropzone.ondragover = (e) => { e.preventDefault(); empDropzone.style.borderColor = "#34d399"; };
-    empDropzone.ondragleave = () => empDropzone.style.borderColor = "rgba(16, 185, 129, 0.4)";
-    empDropzone.ondrop = (e) => {
-        e.preventDefault();
-        empDropzone.style.borderColor = "rgba(16, 185, 129, 0.4)";
-        if (e.dataTransfer.files.length) handleImageFiles(e.dataTransfer.files, "employee");
-    };
+        empDropzone.ondragover = (e) => { e.preventDefault(); empDropzone.style.borderColor = "#34d399"; };
+        empDropzone.ondragleave = () => empDropzone.style.borderColor = "rgba(16, 185, 129, 0.4)";
+        empDropzone.ondrop = (e) => {
+            e.preventDefault();
+            empDropzone.style.borderColor = "rgba(16, 185, 129, 0.4)";
+            if (e.dataTransfer.files.length) handleImageFiles(e.dataTransfer.files, "employee");
+        };
+    }
 
-    empUploadBtn.onclick = () => submitImageBatch("employee");
+    if (empUploadBtn) {
+        empUploadBtn.onclick = () => submitImageBatch("employee");
+    }
 }
 
 function handleImageFiles(files, role) {
@@ -586,6 +873,8 @@ function renderImagePreviews(role) {
     const batch = role === "admin" ? adminImageBatch : empImageBatch;
     const grid = document.getElementById(role === "admin" ? "adminPreviewGrid" : "empPreviewGrid");
     const btn = document.getElementById(role === "admin" ? "adminUploadBtn" : "empUploadBtn");
+
+    if (!grid || !btn) return;
 
     if (batch.length > 0) {
         btn.classList.remove("hidden");
@@ -667,7 +956,7 @@ async function submitImageBatch(role) {
 }
 
 // -------------------------------------------------------------
-// 6. UPDATE STATUS MODAL CONTROLLER (ADMIN)
+// 8. UPDATE STATUS MODAL CONTROLLER (ADMIN)
 // -------------------------------------------------------------
 function openStatusModal(txId, currentStatus, currentProgress, currentEmpId) {
     selectedTxId = txId;
@@ -690,38 +979,44 @@ function openStatusModal(txId, currentStatus, currentProgress, currentEmpId) {
     modal.classList.remove("hidden");
 }
 
-document.getElementById("closeStatusModalBtn").onclick = () => {
-    document.getElementById("updateStatusModal").classList.add("hidden");
-};
+const closeBtn = document.getElementById("closeStatusModalBtn");
+if (closeBtn) {
+    closeBtn.onclick = () => {
+        document.getElementById("updateStatusModal").classList.add("hidden");
+    };
+}
 
-document.getElementById("saveStatusBtn").onclick = async () => {
-    if (!selectedTxId) return;
-    const modal = document.getElementById("updateStatusModal");
-    const newStatus = document.getElementById("modalStatusSelect").value;
-    const newProgress = `${document.getElementById("modalProgressRange").value}%`;
-    const newEmpId = document.getElementById("modalEmpSelect").value;
+const saveBtn = document.getElementById("saveStatusBtn");
+if (saveBtn) {
+    saveBtn.onclick = async () => {
+        if (!selectedTxId) return;
+        const modal = document.getElementById("updateStatusModal");
+        const newStatus = document.getElementById("modalStatusSelect").value;
+        const newProgress = `${document.getElementById("modalProgressRange").value}%`;
+        const newEmpId = document.getElementById("modalEmpSelect").value;
 
-    try {
-        const res = await fetch("/api/update-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                transaction_id: selectedTxId,
-                status: newStatus,
-                progress_pct: newProgress,
-                employee_id: newEmpId
-            })
-        });
-        if (res.ok) {
-            modal.classList.add("hidden");
-            loadAdminDashboard();
-        } else {
-            alert("Failed to update status.");
+        try {
+            const res = await fetch("/api/update-status", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    transaction_id: selectedTxId,
+                    status: newStatus,
+                    progress_pct: newProgress,
+                    employee_id: newEmpId
+                })
+            });
+            if (res.ok) {
+                modal.classList.add("hidden");
+                loadAdminDashboard();
+            } else {
+                alert("Failed to update status.");
+            }
+        } catch (e) {
+            alert(e.message);
         }
-    } catch (e) {
-        alert(e.message);
-    }
-};
+    };
+}
 
 // Export Receipt PDF helper
 async function exportReceiptPdf(data) {

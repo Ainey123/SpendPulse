@@ -90,182 +90,283 @@
 
     <!-- ==================== VIEW 2: ADMIN DASHBOARD PORTAL ==================== -->
     <div id="adminView" class="hidden">
-      <!-- Admin Metric Cards Grid -->
-      <div class="metrics-grid">
-        <div class="stat-card">
-          <div class="stat-header">
-            <span class="stat-title">Employees</span>
-            <div class="stat-icon-wrapper indigo">👥</div>
+
+      <!-- Admin Top Section Navigation Tabs -->
+      <div class="auth-tabs" style="margin-bottom: 20px;">
+        <button id="adminTabOverview" class="auth-tab active">📊 Overview & Tasks</button>
+        <button id="adminTabLedger" class="auth-tab">🏦 Continuous Bank Ledger</button>
+        <button id="adminTabTeam" class="auth-tab">👥 Team Management</button>
+      </div>
+
+      <!-- PANEL 1: OVERVIEW & TASKS -->
+      <div id="adminOverviewPanel">
+        <!-- Admin Metric Cards Grid -->
+        <div class="metrics-grid">
+          <div class="stat-card">
+            <div class="stat-header">
+              <span class="stat-title">Employees</span>
+              <div class="stat-icon-wrapper indigo">👥</div>
+            </div>
+            <div id="statEmployees" class="stat-value">0</div>
+            <div class="stat-subtitle">Registered team members</div>
           </div>
-          <div id="statEmployees" class="stat-value">0</div>
-          <div class="stat-subtitle">Registered team members</div>
+
+          <div class="stat-card">
+            <div class="stat-header">
+              <span class="stat-title">Active Tasks</span>
+              <div class="stat-icon-wrapper sky">⚡</div>
+            </div>
+            <div id="statActiveTasks" class="stat-value">0</div>
+            <div class="stat-subtitle">Pending & In Progress</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-header">
+              <span class="stat-title">Completed</span>
+              <div class="stat-icon-wrapper emerald">✅</div>
+            </div>
+            <div id="statCompleted" class="stat-value">0</div>
+            <div class="stat-subtitle">Successfully finalized</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-header">
+              <span class="stat-title">Pending Payments</span>
+              <div class="stat-icon-wrapper amber">💳</div>
+            </div>
+            <div id="statPendingPayments" class="stat-value">0</div>
+            <div class="stat-subtitle">Awaiting processing</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-header">
+              <span class="stat-title">Payments Sent</span>
+              <div class="stat-icon-wrapper purple">💸</div>
+            </div>
+            <div id="statPaymentsSent" class="stat-value">0</div>
+            <div class="stat-subtitle">Dispatched transactions</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-header">
+              <span class="stat-title">Total Volume</span>
+              <div class="stat-icon-wrapper emerald">💰</div>
+            </div>
+            <div id="statTotalSpend" class="stat-value">PKR 0</div>
+            <div class="stat-subtitle">Cumulative spend volume</div>
+          </div>
         </div>
 
-        <div class="stat-card">
-          <div class="stat-header">
-            <span class="stat-title">Active Tasks</span>
-            <div class="stat-icon-wrapper sky">⚡</div>
+        <!-- Admin Multi-Image Upload & Task Creation Form -->
+        <div class="upload-card">
+          <h3 style="margin: 0 0 8px 0; font-size: 18px; color: white;">🖼️ Upload Images & Create Task</h3>
+          <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">Upload receipt images or task bills (JPG, JPEG, PNG, WEBP). Select multiple images with preview controls.</p>
+
+          <div id="adminDropzone" class="dropzone">
+            <p style="margin: 0; font-weight: 600; color: #818cf8;">📸 Drag & Drop image files here or click to select</p>
+            <span style="font-size: 12px; color: #94a3b8;">Supports multiple JPG, PNG, WEBP images</span>
+            <input type="file" id="adminFileInput" accept="image/*" multiple hidden />
           </div>
-          <div id="statActiveTasks" class="stat-value">0</div>
-          <div class="stat-subtitle">Pending & In Progress</div>
+
+          <!-- Live Thumbnails Grid -->
+          <div id="adminPreviewGrid" class="image-preview-grid"></div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-top: 20px;">
+            <div class="form-group">
+              <label>Assign to Employee</label>
+              <select id="adminAssignSelect" class="form-select">
+                <option value="">Unassigned (General Queue)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Initial Status</label>
+              <select id="adminInitialStatus" class="form-select">
+                <option value="Pending">Pending</option>
+                <option value="Processing">Processing</option>
+                <option value="Payment Sent">Payment Sent</option>
+                <option value="Completed">Completed</option>
+              </select>
+            </div>
+          </div>
+
+          <button id="adminUploadBtn" class="btn-primary hidden" style="width: 100%; margin-top: 14px;">Upload Images & Process Data</button>
+          <div id="adminUploadStatus" class="hidden" style="margin-top: 14px;"></div>
         </div>
 
-        <div class="stat-card">
-          <div class="stat-header">
-            <span class="stat-title">Completed</span>
-            <div class="stat-icon-wrapper emerald">✅</div>
+        <!-- Master Tasks Table -->
+        <div class="data-table-container">
+          <div class="table-header-title">
+            <span>📋 Master Task & Payment Records</span>
+            <button id="refreshAdminTableBtn" class="secondary-btn" style="padding: 6px 12px; font-size: 12px;">🔄 Refresh</button>
           </div>
-          <div id="statCompleted" class="stat-value">0</div>
-          <div class="stat-subtitle">Successfully finalized</div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-header">
-            <span class="stat-title">Pending Payments</span>
-            <div class="stat-icon-wrapper amber">💳</div>
+          <div style="overflow-x: auto;">
+            <table class="responsive-table">
+              <thead>
+                <tr>
+                  <th>ID / Ref</th>
+                  <th>Date & Time</th>
+                  <th>Sender / Recipient</th>
+                  <th>Amount</th>
+                  <th>Assigned To</th>
+                  <th>Status</th>
+                  <th>Progress</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="adminTxTableBody">
+                <tr><td colspan="8" style="text-align: center; color: #94a3b8;">Loading task records...</td></tr>
+              </tbody>
+            </table>
           </div>
-          <div id="statPendingPayments" class="stat-value">0</div>
-          <div class="stat-subtitle">Awaiting processing</div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-header">
-            <span class="stat-title">Payments Sent</span>
-            <div class="stat-icon-wrapper purple">💸</div>
-          </div>
-          <div id="statPaymentsSent" class="stat-value">0</div>
-          <div class="stat-subtitle">Dispatched transactions</div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-header">
-            <span class="stat-title">Total Volume</span>
-            <div class="stat-icon-wrapper emerald">💰</div>
-          </div>
-          <div id="statTotalSpend" class="stat-value">PKR 0</div>
-          <div class="stat-subtitle">Cumulative spend volume</div>
         </div>
       </div>
 
-      <!-- Employee Management Section -->
-      <div class="upload-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-          <h3 style="margin: 0; font-size: 18px; color: white;">👥 Employee Management</h3>
-          <button id="toggleCreateEmpBtn" class="btn-primary" style="padding: 8px 16px; font-size: 13px;">➕ Add New Employee</button>
+
+      <!-- PANEL 2: CONTINUOUS BANK LEDGER STATEMENT (MATCHES USER REFERENCE) -->
+      <div id="adminLedgerPanel" class="hidden">
+        
+        <!-- Filter Toolbar -->
+        <div class="upload-card" style="margin-bottom: 20px; padding: 20px;">
+          <h3 style="margin: 0 0 14px 0; font-size: 18px; color: white;">🔍 Statement Search & Tenure Filters</h3>
+          
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px;">
+            <div class="form-group" style="margin: 0;">
+              <label>Name / Particulars Search</label>
+              <input type="text" id="ledgerSearchInput" class="form-input" placeholder="e.g. POS SALE, Mastercard, Name, Ref..." />
+            </div>
+
+            <div class="form-group" style="margin: 0;">
+              <label>Tenure (Month Select)</label>
+              <select id="ledgerMonthSelect" class="form-select">
+                <option value="all">All Months (Continuous Ledger)</option>
+              </select>
+            </div>
+
+            <div class="form-group" style="margin: 0;">
+              <label>Start Date (Calendar)</label>
+              <input type="date" id="ledgerDateFrom" class="form-input" />
+            </div>
+
+            <div class="form-group" style="margin: 0;">
+              <label>End Date (Calendar)</label>
+              <input type="date" id="ledgerDateTo" class="form-input" />
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 16px;">
+            <button id="resetLedgerBtn" class="secondary-btn" style="padding: 8px 16px; font-size: 13px;">🔄 Reset Filters</button>
+            <button id="exportLedgerCsvBtn" class="btn-primary" style="padding: 8px 18px; font-size: 13px; background: #059669;">📥 Export Statement CSV</button>
+          </div>
         </div>
 
-        <!-- Create Employee Form (Collapsible) -->
-        <form id="createEmpForm" class="hidden" style="background: #0f172a; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-          <h4 style="margin: 0 0 14px 0; color: #818cf8;">Create Employee Credentials</h4>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
-            <div class="form-group">
-              <label>Employee Full Name</label>
-              <input type="text" id="newEmpName" class="form-input" placeholder="e.g. Sarah Jenkins" required />
-            </div>
-            <div class="form-group">
-              <label>Username / ID</label>
-              <input type="text" id="newEmpUsername" class="form-input" placeholder="e.g. sjenkins" required />
-            </div>
-            <div class="form-group">
-              <label>4-Digit PIN Code</label>
-              <input type="text" id="newEmpPin" class="form-input" maxlength="4" placeholder="e.g. 7482" required />
-            </div>
-            <div class="form-group">
-              <label>Password</label>
-              <input type="text" id="newEmpPassword" class="form-input" placeholder="e.g. Pass#9482" required />
-            </div>
+        <!-- Ledger Financial Summary Bar -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
+          <div style="background: #1e293b; border: 1px solid rgba(255,255,255,0.08); padding: 14px; border-radius: 12px;">
+            <div style="font-size: 12px; color: #94a3b8; font-weight: 600;">OPENING BALANCE</div>
+            <div id="ledgerOpeningBal" style="font-size: 18px; font-weight: 800; color: #e2e8f0; margin-top: 4px;">PKR 1,000,000.00</div>
           </div>
-          <div style="display: flex; gap: 10px; margin-top: 12px;">
-            <button type="button" id="autoGenCredentialsBtn" class="secondary-btn" style="padding: 8px 14px; font-size: 13px;">✨ Auto-Generate Credentials</button>
-            <button type="submit" class="btn-primary" style="padding: 8px 20px; font-size: 13px;">Save Employee</button>
+          <div style="background: #1e293b; border: 1px solid rgba(255,255,255,0.08); padding: 14px; border-radius: 12px;">
+            <div style="font-size: 12px; color: #fca5a5; font-weight: 600;">TOTAL DEBIT (OUT)</div>
+            <div id="ledgerTotalDebit" style="font-size: 18px; font-weight: 800; color: #ef4444; margin-top: 4px;">PKR 0.00</div>
           </div>
-          <div id="createEmpMsg" class="hidden" style="margin-top: 10px;"></div>
-        </form>
+          <div style="background: #1e293b; border: 1px solid rgba(255,255,255,0.08); padding: 14px; border-radius: 12px;">
+            <div style="font-size: 12px; color: #6ee7b7; font-weight: 600;">TOTAL CREDIT (IN)</div>
+            <div id="ledgerTotalCredit" style="font-size: 18px; font-weight: 800; color: #10b981; margin-top: 4px;">PKR 0.00</div>
+          </div>
+          <div style="background: #1e293b; border: 1px solid rgba(255,255,255,0.08); padding: 14px; border-radius: 12px;">
+            <div style="font-size: 12px; color: #818cf8; font-weight: 600;">CLOSING BALANCE</div>
+            <div id="ledgerClosingBal" style="font-size: 18px; font-weight: 800; color: #6366f1; margin-top: 4px;">PKR 1,000,000.00</div>
+          </div>
+        </div>
 
-        <!-- Employee List Table -->
-        <div style="overflow-x: auto;">
-          <table class="responsive-table">
-            <thead>
-              <tr>
-                <th>User ID</th>
-                <th>Employee Name</th>
-                <th>Username</th>
-                <th>PIN Code</th>
-                <th>Password</th>
-                <th>Role</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="employeeTableBody">
-              <tr><td colspan="7" style="text-align: center; color: #94a3b8;">Loading team members...</td></tr>
-            </tbody>
-          </table>
+        <!-- Bank Statement Ledger Table -->
+        <div class="data-table-container">
+          <div class="table-header-title">
+            <span>🏛️ Continuous Bank Statement & Ledger Table</span>
+            <span style="font-size: 12px; color: #94a3b8; font-weight: normal;">Running Balance Carried Forward Across Months</span>
+          </div>
+          <div style="overflow-x: auto;">
+            <table class="responsive-table bank-ledger-table">
+              <thead>
+                <tr>
+                  <th style="width: 140px;">DATE</th>
+                  <th>PARTICULARS</th>
+                  <th style="width: 150px;">INST. NO. / REF</th>
+                  <th style="width: 130px; text-align: right;">DEBIT</th>
+                  <th style="width: 130px; text-align: right;">CREDIT</th>
+                  <th style="width: 160px; text-align: right;">RUNNING BALANCE</th>
+                </tr>
+              </thead>
+              <tbody id="bankLedgerTableBody">
+                <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Loading statement ledger...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+
+      <!-- PANEL 3: TEAM MANAGEMENT -->
+      <div id="adminTeamPanel" class="hidden">
+        <!-- Employee Management Section -->
+        <div class="upload-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin: 0; font-size: 18px; color: white;">👥 Team & Employee Management</h3>
+            <button id="toggleCreateEmpBtn2" class="btn-primary" style="padding: 8px 16px; font-size: 13px;">➕ Add New Employee</button>
+          </div>
+
+          <!-- Create Employee Form -->
+          <form id="createEmpForm2" class="hidden" style="background: #0f172a; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+            <h4 style="margin: 0 0 14px 0; color: #818cf8;">Create Employee Credentials</h4>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+              <div class="form-group">
+                <label>Employee Full Name</label>
+                <input type="text" id="newEmpName2" class="form-input" placeholder="e.g. Sarah Jenkins" required />
+              </div>
+              <div class="form-group">
+                <label>Username / ID</label>
+                <input type="text" id="newEmpUsername2" class="form-input" placeholder="e.g. sjenkins" required />
+              </div>
+              <div class="form-group">
+                <label>4-Digit PIN Code</label>
+                <input type="text" id="newEmpPin2" class="form-input" maxlength="4" placeholder="e.g. 7482" required />
+              </div>
+              <div class="form-group">
+                <label>Password</label>
+                <input type="text" id="newEmpPassword2" class="form-input" placeholder="e.g. Pass#9482" required />
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 12px;">
+              <button type="button" id="autoGenCredentialsBtn2" class="secondary-btn" style="padding: 8px 14px; font-size: 13px;">✨ Auto-Generate Credentials</button>
+              <button type="submit" class="btn-primary" style="padding: 8px 20px; font-size: 13px;">Save Employee</button>
+            </div>
+            <div id="createEmpMsg2" class="hidden" style="margin-top: 10px;"></div>
+          </form>
+
+          <!-- Employee List Table -->
+          <div style="overflow-x: auto;">
+            <table class="responsive-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Employee Name</th>
+                  <th>Username</th>
+                  <th>PIN Code</th>
+                  <th>Password</th>
+                  <th>Role</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="employeeTableBody2">
+                <tr><td colspan="7" style="text-align: center; color: #94a3b8;">Loading team members...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      <!-- Admin Multi-Image Upload & Task Creation Form -->
-      <div class="upload-card">
-        <h3 style="margin: 0 0 8px 0; font-size: 18px; color: white;">🖼️ Upload Images & Create Task</h3>
-        <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">Upload receipt images or task bills (JPG, JPEG, PNG, WEBP). Select multiple images with preview controls.</p>
-
-        <div id="adminDropzone" class="dropzone">
-          <p style="margin: 0; font-weight: 600; color: #818cf8;">📸 Drag & Drop image files here or click to select</p>
-          <span style="font-size: 12px; color: #94a3b8;">Supports multiple JPG, PNG, WEBP images</span>
-          <input type="file" id="adminFileInput" accept="image/*" multiple hidden />
-        </div>
-
-        <!-- Live Thumbnails Grid -->
-        <div id="adminPreviewGrid" class="image-preview-grid"></div>
-
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-top: 20px;">
-          <div class="form-group">
-            <label>Assign to Employee</label>
-            <select id="adminAssignSelect" class="form-select">
-              <option value="">Unassigned (General Queue)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label>Initial Status</label>
-            <select id="adminInitialStatus" class="form-select">
-              <option value="Pending">Pending</option>
-              <option value="Processing">Processing</option>
-              <option value="Payment Sent">Payment Sent</option>
-              <option value="Completed">Completed</option>
-            </select>
-          </div>
-        </div>
-
-        <button id="adminUploadBtn" class="btn-primary hidden" style="width: 100%; margin-top: 14px;">Upload Images & Process Data</button>
-        <div id="adminUploadStatus" class="hidden" style="margin-top: 14px;"></div>
-      </div>
-
-      <!-- Master Tasks & Payments Table -->
-      <div class="data-table-container">
-        <div class="table-header-title">
-          <span>📋 Master Task & Payment Records</span>
-          <button id="refreshAdminTableBtn" class="secondary-btn" style="padding: 6px 12px; font-size: 12px;">🔄 Refresh</button>
-        </div>
-        <div style="overflow-x: auto;">
-          <table class="responsive-table">
-            <thead>
-              <tr>
-                <th>ID / Ref</th>
-                <th>Date & Time</th>
-                <th>Sender / Recipient</th>
-                <th>Amount</th>
-                <th>Assigned To</th>
-                <th>Status</th>
-                <th>Progress</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="adminTxTableBody">
-              <tr><td colspan="8" style="text-align: center; color: #94a3b8;">Loading task records...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
 
 

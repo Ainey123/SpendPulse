@@ -481,6 +481,41 @@ table.responsive-table tr:hover {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Bank Ledger Statement Custom Table Styling */
+table.bank-ledger-table th {
+  background: #090d16;
+  color: #94a3b8;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+table.bank-ledger-table td.debit-val {
+  color: #f87171;
+  font-weight: 600;
+  font-family: monospace, monospace;
+}
+
+table.bank-ledger-table td.credit-val {
+  color: #34d399;
+  font-weight: 600;
+  font-family: monospace, monospace;
+}
+
+table.bank-ledger-table td.running-bal {
+  color: #818cf8;
+  font-weight: 700;
+  font-family: monospace, monospace;
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.month-divider-row td {
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 700;
+  color: #fbbf24;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 /* Modals */
 .modal-overlay {
   position: fixed;

@@ -3,66 +3,403 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>SpendPulse Scanner</title>
+  <title>SpendPulse Enterprise - Dual Portal System</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#4f46e5" />
-  <!-- Tesseract.js for 100% reliable client-side OCR without API keys -->
+  <meta name="theme-color" content="#0f172a" />
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <!-- pdf-lib for generating PDFs client-side -->
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 </head>
 <body>
-  <div class="container">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-      <h1 style="margin: 0; font-size: 24px;">SpendPulse Scanner</h1>
-      <button id="installBtn" class="secondary-btn" style="width: auto; margin: 0; padding: 6px 12px; font-size: 13px;">📱 Download App</button>
-    </div>
-    
-    <p style="font-size: 14px; margin-bottom: 16px;">Upload any receipt to extract its data and save it instantly to Google Sheets.</p>
-    
-    <div id="dropzone" class="dropzone">
-      <p>Drag & Drop an image here or click to select</p>
-      <input type="file" id="fileInput" accept="image/*" hidden />
+
+  <!-- Top App Navigation Header -->
+  <header class="app-header">
+    <div class="brand-logo">
+      <div class="brand-icon">S</div>
+      <div>
+        <h1 class="brand-title">SpendPulse</h1>
+        <div style="font-size: 11px; color: #94a3b8;">Enterprise Management System</div>
+      </div>
     </div>
 
-    <div id="pdfDropzone" class="dropzone" style="border-color: #059669; margin-top: 12px;">
-      <p>📄 Drag & Drop a PDF bill here or click to select</p>
-      <input type="file" id="pdfInput" accept=".pdf" hidden />
+    <div id="userHeaderNav" class="user-badge-bar hidden">
+      <span id="userRoleBadge" class="role-badge admin">Admin</span>
+      <span id="userNameDisplay" style="font-weight: 600; font-size: 14px;">Admin User</span>
+      <button id="logoutBtn" class="logout-btn">🔒 Logout</button>
+    </div>
+  </header>
+
+  <!-- Main View Container -->
+  <main class="main-wrapper">
+
+    <!-- ==================== VIEW 1: AUTHENTICATION PORTAL ==================== -->
+    <div id="authView" class="auth-container">
+      <div class="auth-tabs">
+        <button id="tabAdmin" class="auth-tab active">🛡️ Admin Portal</button>
+        <button id="tabEmployee" class="auth-tab">👤 Employee Portal</button>
+      </div>
+
+      <h2 id="authTitle" style="margin: 0 0 6px 0; font-size: 22px;">Admin Login</h2>
+      <p id="authSubtitle" style="font-size: 13px; color: #94a3b8; margin-bottom: 24px;">Enter your admin username and PIN code.</p>
+
+      <form id="loginForm" onsubmit="return false;">
+        <div class="form-group">
+          <label for="loginUsername">Username / ID</label>
+          <input type="text" id="loginUsername" class="form-input" placeholder="e.g. admin or employee1" required />
+        </div>
+
+        <div class="pin-display-wrapper">
+          <label style="font-size: 13px; font-weight: 600; color: #94a3b8;">Enter 4-Digit Security PIN</label>
+          <div class="pin-dots">
+            <div id="dot1" class="pin-dot"></div>
+            <div id="dot2" class="pin-dot"></div>
+            <div id="dot3" class="pin-dot"></div>
+            <div id="dot4" class="pin-dot"></div>
+          </div>
+        </div>
+
+        <!-- PIN Keypad -->
+        <div class="pin-keypad">
+          <button type="button" class="pin-key" data-val="1">1</button>
+          <button type="button" class="pin-key" data-val="2">2</button>
+          <button type="button" class="pin-key" data-val="3">3</button>
+          <button type="button" class="pin-key" data-val="4">4</button>
+          <button type="button" class="pin-key" data-val="5">5</button>
+          <button type="button" class="pin-key" data-val="6">6</button>
+          <button type="button" class="pin-key" data-val="7">7</button>
+          <button type="button" class="pin-key" data-val="8">8</button>
+          <button type="button" class="pin-key" data-val="9">9</button>
+          <button type="button" class="pin-key action-key" id="pinClear">CLR</button>
+          <button type="button" class="pin-key" data-val="0">0</button>
+          <button type="button" class="pin-key action-key" id="pinBack">⌫</button>
+        </div>
+
+        <div style="margin-top: 12px;">
+          <a href="#" id="togglePasswordFallback" style="font-size: 12px; color: #818cf8; text-decoration: none;">Use password instead</a>
+        </div>
+
+        <div id="passwordFallbackGroup" class="form-group hidden" style="margin-top: 12px;">
+          <input type="password" id="loginPassword" class="form-input" placeholder="Password fallback" />
+        </div>
+
+        <button type="submit" id="loginSubmitBtn" class="btn-primary" style="width: 100%; margin-top: 20px;">🔐 Authenticate & Enter</button>
+        <div id="authError" class="error hidden" style="margin-top: 14px;"></div>
+      </form>
     </div>
 
-    <img id="preview" class="hidden" alt="Preview" />
 
-    <button id="scanBtn" class="primary-btn hidden">Upload & Save to Sheet</button>
+    <!-- ==================== VIEW 2: ADMIN DASHBOARD PORTAL ==================== -->
+    <div id="adminView" class="hidden">
+      <!-- Admin Metric Cards Grid -->
+      <div class="metrics-grid">
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Employees</span>
+            <div class="stat-icon-wrapper indigo">👥</div>
+          </div>
+          <div id="statEmployees" class="stat-value">0</div>
+          <div class="stat-subtitle">Registered team members</div>
+        </div>
 
-    <div id="loading" class="hidden">
-      <div class="spinner"></div>
-      <p id="loadingStatus">Reading text from image...</p>
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Active Tasks</span>
+            <div class="stat-icon-wrapper sky">⚡</div>
+          </div>
+          <div id="statActiveTasks" class="stat-value">0</div>
+          <div class="stat-subtitle">Pending & In Progress</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Completed</span>
+            <div class="stat-icon-wrapper emerald">✅</div>
+          </div>
+          <div id="statCompleted" class="stat-value">0</div>
+          <div class="stat-subtitle">Successfully finalized</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Pending Payments</span>
+            <div class="stat-icon-wrapper amber">💳</div>
+          </div>
+          <div id="statPendingPayments" class="stat-value">0</div>
+          <div class="stat-subtitle">Awaiting processing</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Payments Sent</span>
+            <div class="stat-icon-wrapper purple">💸</div>
+          </div>
+          <div id="statPaymentsSent" class="stat-value">0</div>
+          <div class="stat-subtitle">Dispatched transactions</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Total Volume</span>
+            <div class="stat-icon-wrapper emerald">💰</div>
+          </div>
+          <div id="statTotalSpend" class="stat-value">PKR 0</div>
+          <div class="stat-subtitle">Cumulative spend volume</div>
+        </div>
+      </div>
+
+      <!-- Employee Management Section -->
+      <div class="upload-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="margin: 0; font-size: 18px; color: white;">👥 Employee Management</h3>
+          <button id="toggleCreateEmpBtn" class="btn-primary" style="padding: 8px 16px; font-size: 13px;">➕ Add New Employee</button>
+        </div>
+
+        <!-- Create Employee Form (Collapsible) -->
+        <form id="createEmpForm" class="hidden" style="background: #0f172a; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+          <h4 style="margin: 0 0 14px 0; color: #818cf8;">Create Employee Credentials</h4>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+            <div class="form-group">
+              <label>Employee Full Name</label>
+              <input type="text" id="newEmpName" class="form-input" placeholder="e.g. Sarah Jenkins" required />
+            </div>
+            <div class="form-group">
+              <label>Username / ID</label>
+              <input type="text" id="newEmpUsername" class="form-input" placeholder="e.g. sjenkins" required />
+            </div>
+            <div class="form-group">
+              <label>4-Digit PIN Code</label>
+              <input type="text" id="newEmpPin" class="form-input" maxlength="4" placeholder="e.g. 7482" required />
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input type="text" id="newEmpPassword" class="form-input" placeholder="e.g. Pass#9482" required />
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 12px;">
+            <button type="button" id="autoGenCredentialsBtn" class="secondary-btn" style="padding: 8px 14px; font-size: 13px;">✨ Auto-Generate Credentials</button>
+            <button type="submit" class="btn-primary" style="padding: 8px 20px; font-size: 13px;">Save Employee</button>
+          </div>
+          <div id="createEmpMsg" class="hidden" style="margin-top: 10px;"></div>
+        </form>
+
+        <!-- Employee List Table -->
+        <div style="overflow-x: auto;">
+          <table class="responsive-table">
+            <thead>
+              <tr>
+                <th>User ID</th>
+                <th>Employee Name</th>
+                <th>Username</th>
+                <th>PIN Code</th>
+                <th>Password</th>
+                <th>Role</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="employeeTableBody">
+              <tr><td colspan="7" style="text-align: center; color: #94a3b8;">Loading team members...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Admin Multi-Image Upload & Task Creation Form -->
+      <div class="upload-card">
+        <h3 style="margin: 0 0 8px 0; font-size: 18px; color: white;">🖼️ Upload Images & Create Task</h3>
+        <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">Upload receipt images or task bills (JPG, JPEG, PNG, WEBP). Select multiple images with preview controls.</p>
+
+        <div id="adminDropzone" class="dropzone">
+          <p style="margin: 0; font-weight: 600; color: #818cf8;">📸 Drag & Drop image files here or click to select</p>
+          <span style="font-size: 12px; color: #94a3b8;">Supports multiple JPG, PNG, WEBP images</span>
+          <input type="file" id="adminFileInput" accept="image/*" multiple hidden />
+        </div>
+
+        <!-- Live Thumbnails Grid -->
+        <div id="adminPreviewGrid" class="image-preview-grid"></div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-top: 20px;">
+          <div class="form-group">
+            <label>Assign to Employee</label>
+            <select id="adminAssignSelect" class="form-select">
+              <option value="">Unassigned (General Queue)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Initial Status</label>
+            <select id="adminInitialStatus" class="form-select">
+              <option value="Pending">Pending</option>
+              <option value="Processing">Processing</option>
+              <option value="Payment Sent">Payment Sent</option>
+              <option value="Completed">Completed</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="adminUploadBtn" class="btn-primary hidden" style="width: 100%; margin-top: 14px;">Upload Images & Process Data</button>
+        <div id="adminUploadStatus" class="hidden" style="margin-top: 14px;"></div>
+      </div>
+
+      <!-- Master Tasks & Payments Table -->
+      <div class="data-table-container">
+        <div class="table-header-title">
+          <span>📋 Master Task & Payment Records</span>
+          <button id="refreshAdminTableBtn" class="secondary-btn" style="padding: 6px 12px; font-size: 12px;">🔄 Refresh</button>
+        </div>
+        <div style="overflow-x: auto;">
+          <table class="responsive-table">
+            <thead>
+              <tr>
+                <th>ID / Ref</th>
+                <th>Date & Time</th>
+                <th>Sender / Recipient</th>
+                <th>Amount</th>
+                <th>Assigned To</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="adminTxTableBody">
+              <tr><td colspan="8" style="text-align: center; color: #94a3b8;">Loading task records...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
-    <div id="message" class="hidden"></div>
+
+    <!-- ==================== VIEW 3: EMPLOYEE DASHBOARD PORTAL ==================== -->
+    <div id="employeeView" class="hidden">
+      <!-- Employee Welcome & Quick Stats -->
+      <div class="metrics-grid">
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">My Assigned Work</span>
+            <div class="stat-icon-wrapper sky">📌</div>
+          </div>
+          <div id="empStatAssigned" class="stat-value">0</div>
+          <div class="stat-subtitle">Tasks assigned to you</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Pending Payments</span>
+            <div class="stat-icon-wrapper amber">💳</div>
+          </div>
+          <div id="empStatPending" class="stat-value">0</div>
+          <div class="stat-subtitle">Awaiting confirmation</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">Completed Work</span>
+            <div class="stat-icon-wrapper emerald">✅</div>
+          </div>
+          <div id="empStatCompleted" class="stat-value">0</div>
+          <div class="stat-subtitle">Finalized tasks</div>
+        </div>
+      </div>
+
+      <!-- Employee Multi-Image Task Submission Form -->
+      <div class="upload-card">
+        <h3 style="margin: 0 0 8px 0; font-size: 18px; color: white;">📸 Upload Receipt / Task Images</h3>
+        <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">Upload image files of your receipts or completed tasks. Select multiple images with preview controls.</p>
+
+        <div id="empDropzone" class="dropzone">
+          <p style="margin: 0; font-weight: 600; color: #34d399;">📷 Drag & Drop images here or click to select</p>
+          <span style="font-size: 12px; color: #94a3b8;">JPG, PNG, WEBP multiple selection supported</span>
+          <input type="file" id="empFileInput" accept="image/*" multiple hidden />
+        </div>
+
+        <!-- Live Thumbnails Grid -->
+        <div id="empPreviewGrid" class="image-preview-grid"></div>
+
+        <button id="empUploadBtn" class="btn-primary hidden" style="width: 100%; margin-top: 14px; background: #10b981;">Submit Images & Record</button>
+        <div id="empUploadStatus" class="hidden" style="margin-top: 14px;"></div>
+      </div>
+
+      <!-- Employee Personal Work & Payments List -->
+      <div class="data-table-container">
+        <div class="table-header-title">
+          <span>📋 My Personal Tasks & Payment Statuses</span>
+          <button id="refreshEmpTableBtn" class="secondary-btn" style="padding: 6px 12px; font-size: 12px;">🔄 Refresh</button>
+        </div>
+        <div style="overflow-x: auto;">
+          <table class="responsive-table">
+            <thead>
+              <tr>
+                <th>ID / Ref</th>
+                <th>Date & Time</th>
+                <th>Recipient / Details</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Export</th>
+              </tr>
+            </thead>
+            <tbody id="empTxTableBody">
+              <tr><td colspan="7" style="text-align: center; color: #94a3b8;">Loading your assigned tasks...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- Admin Status & Progress Update Modal -->
+  <div id="updateStatusModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h3 style="margin: 0 0 16px 0; color: white;">⚙️ Update Status & Progress</h3>
+      
+      <div class="form-group">
+        <label>Payment / Task Status</label>
+        <select id="modalStatusSelect" class="form-select">
+          <option value="Pending">Pending</option>
+          <option value="Processing">Processing</option>
+          <option value="Payment Sent">Payment Sent</option>
+          <option value="Completed">Completed</option>
+          <option value="Failed">Failed</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Progress Percentage (<span id="modalProgressVal">50%</span>)</label>
+        <input type="range" id="modalProgressRange" min="0" max="100" step="5" value="50" style="width: 100%; margin-top: 8px;" />
+      </div>
+
+      <div class="form-group">
+        <label>Assign to Employee</label>
+        <select id="modalEmpSelect" class="form-select">
+          <option value="">Unassigned</option>
+        </select>
+      </div>
+
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button id="saveStatusBtn" class="btn-primary" style="flex: 1;">Save Changes</button>
+        <button id="closeStatusModalBtn" class="secondary-btn" style="flex: 1;">Cancel</button>
+      </div>
+    </div>
   </div>
 
-  <!-- Duplicate Warning Modal -->
+  <!-- Duplicate Payment Warning Modal -->
   <div id="duplicateModal" class="modal-overlay hidden">
     <div class="modal-box">
-      <div class="modal-header">
-        <span class="warning-icon">⚠️</span>
-        <h3>Duplicate Payment Detected</h3>
-      </div>
-      <p id="duplicateMessage" class="modal-body">
-        A transaction matching this amount and recipient was previously recorded.
-      </p>
+      <div style="font-size: 28px; margin-bottom: 8px;">⚠️</div>
+      <h3 style="margin: 0 0 8px 0; color: #fbbf24;">Duplicate Payment Detected</h3>
+      <p style="font-size: 13px; color: #94a3b8; margin-bottom: 16px;">A transaction matching this amount and recipient was previously recorded.</p>
       <div id="duplicateDetails" class="duplicate-details-card"></div>
-      <div class="modal-actions">
-        <button id="continueSaveBtn" class="primary-btn continue-btn">Continue & Save</button>
-        <button id="cancelSaveBtn" class="secondary-btn cancel-btn">Cancel</button>
+      <div style="display: flex; gap: 10px;">
+        <button id="continueSaveBtn" class="btn-primary continue-btn" style="flex: 1;">Continue & Save</button>
+        <button id="cancelSaveBtn" class="secondary-btn cancel-btn" style="flex: 1;">Cancel</button>
       </div>
     </div>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
   <script src="app.js"></script>
 </body>
 </html>

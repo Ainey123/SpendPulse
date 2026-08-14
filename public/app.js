@@ -158,6 +158,31 @@ function initPinPad() {
             updatePinDots();
         }
     });
+
+    document.addEventListener("keydown", (e) => {
+        const authView = document.getElementById("authView");
+        if (authView && !authView.classList.contains("hidden")) {
+            if (document.activeElement.id === "loginUsername" || document.activeElement.id === "loginPassword") {
+                return;
+            }
+            if (/^[0-9]$/.test(e.key)) {
+                if (currentPin.length < 4) {
+                    currentPin += e.key;
+                    updatePinDots();
+                    if (currentPin.length === 4) {
+                        handleLoginSubmit();
+                    }
+                }
+            } else if (e.key === "Backspace") {
+                if (currentPin.length > 0) {
+                    currentPin = currentPin.slice(0, -1);
+                    updatePinDots();
+                }
+            } else if (e.key === "Escape") {
+                resetPin();
+            }
+        }
+    });
 }
 
 function resetPin() {

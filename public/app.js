@@ -345,18 +345,23 @@ async function fetchEmployeesList() {
             }
 
             let html = "";
-            users.forEach(u => {
+            users.forEach((u, index) => {
                 const opt = `<option value="${u.user_id}">${u.name} (@${u.username})</option>`;
                 select.innerHTML += opt;
                 modalSelect.innerHTML += opt;
+
+                const pinVal = u.pin_code || '1234';
+                const passVal = u.password || 'pass123';
 
                 html += `
                     <tr>
                         <td><code>${u.user_id}</code></td>
                         <td><b>${u.name}</b></td>
                         <td>@${u.username}</td>
-                        <td><code>${u.pin_code || '****'}</code></td>
-                        <td><code>${u.password || '****'}</code></td>
+                        <td><b style="color: #fbbf24; letter-spacing: 0.1em;">${pinVal}</b></td>
+                        <td>
+                            <span id="pwdText_${index}" style="font-family: monospace; color: #38bdf8;">${passVal}</span>
+                        </td>
                         <td><span class="role-badge ${u.role}">${u.role}</span></td>
                         <td>
                             <button onclick="deleteEmployee('${u.user_id}', '${u.name}')" class="logout-btn" style="padding: 4px 8px; font-size: 11px;">🗑️ Delete</button>

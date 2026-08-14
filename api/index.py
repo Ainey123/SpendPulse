@@ -195,7 +195,7 @@ def app(environ, start_response):
                     "token": f"token_usr_emp1_{uuid.uuid4().hex[:8]}"
                 }
 
-            # If not matched by fallback, search Google Sheets users tab flexibly
+            # Search Google Sheets users tab
             if not found_user:
                 try:
                     ws_tx, ws_users, sid = get_google_sheet_tabs()
@@ -206,7 +206,6 @@ def app(environ, start_response):
                             if not r or len(r) == 0:
                                 continue
                             
-                            # Flexible column extraction
                             u_id = r[0] if len(r) > 0 else f"usr_{uuid.uuid4().hex[:6]}"
                             u_uname = (r[1] if len(r) > 1 else r[0]).strip().lower()
                             u_name = r[2] if len(r) > 2 else u_uname
@@ -246,7 +245,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 2. Get Users (Employees list for Admin)
+    # 2. Get Users (Returns Plain Passwords and PIN Codes for Admin)
     if path == "/api/users" and method == "GET":
         try:
             ws_tx, ws_users, sid = get_google_sheet_tabs()
@@ -254,14 +253,16 @@ def app(environ, start_response):
             users = []
             if len(rows) > 1:
                 for r in rows[1:]:
-                    if len(r) >= 2:
-                        u_id = r[0]
-                        u_uname = r[1] if len(r) > 1 else r[0]
-                        u_name = r[2] if len(r) > 2 else u_uname
-                        u_pin = r[3] if len(r) > 3 else "****"
-                        u_pass = r[4] if len(r) > 4 else "****"
-                        u_role = r[5] if len(r) > 5 else "employee"
+                    if not r or len(r) == 0:
+                        continue
+                    u_id = r[0] if len(r) > 0 else ""
+                    u_uname = r[1] if len(r) > 1 else ""
+                    u_name = r[2] if len(r) > 2 else u_uname
+                    u_pin = r[3] if len(r) > 3 else "1234"
+                    u_pass = r[4] if len(r) > 4 else "pass123"
+                    u_role = r[5] if len(r) > 5 else "employee"
 
+                    if u_uname:
                         users.append({
                             "user_id": u_id,
                             "username": u_uname,
@@ -299,7 +300,7 @@ def app(environ, start_response):
             role = str(data.get("role", "employee")).strip().lower()
 
             if not uname or not name or not pin:
-                status, headers, res = _json(400, {"error": "Username, Name, and PIN code are required."})
+                status, headers, res = _json(400, {"error": "Username, Full Name, and PIN code are required."})
                 start_response(status, headers)
                 return res
 
@@ -307,7 +308,7 @@ def app(environ, start_response):
             ws_tx, ws_users, sid = get_google_sheet_tabs()
             ws_users.append_row([u_id, uname, name, pin, pwd or "123456", role, datetime.now().strftime("%Y-%m-%d")])
 
-            status, headers, res = _json(200, {"message": "User created successfully", "user_id": u_id})
+            status, headers, res = _json(200, {"message": "User created successfully", "user_id": u_id, "username": uname})
             start_response(status, headers)
             return res
         except Exception as e:

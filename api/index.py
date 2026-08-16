@@ -434,6 +434,31 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
+    # Cleanup Unwanted Statement Dump Rows (Admin Only)
+    if path == "/api/cleanup-statement-dumps" and method == "POST":
+        try:
+            ws_tx, ws_users, sid = get_google_sheet_tabs()
+            rows = ws_tx.get_all_values()
+
+            deleted_count = 0
+            if len(rows) > 1:
+                for idx in range(len(rows), 1, -1):
+                    r = rows[idx - 1]
+                    if not r or len(r) == 0:
+                        continue
+                    full_str = " ".join([str(x) for x in r]).lower()
+                    if "statement of account" in full_str or "page of date description" in full_str or "raiwind road branch" in full_str:
+                        ws_tx.delete_rows(idx)
+                        deleted_count += 1
+
+            status, headers, res = _json(200, {"message": f"Cleaned up {deleted_count} unwanted statement dump rows.", "deleted_count": deleted_count})
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
     # 4. Get Dashboard Stats (Admin Only)
     if path == "/api/dashboard-stats" and method == "GET":
         try:

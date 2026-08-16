@@ -437,6 +437,28 @@ function initAdminFormEvents() {
 
     const refBtn = document.getElementById("refreshAdminTableBtn");
     if (refBtn) refBtn.onclick = () => fetchAdminTransactions();
+
+    const cleanupBtn = document.getElementById("cleanupDumpsBtn");
+    if (cleanupBtn) {
+        cleanupBtn.onclick = async () => {
+            if (!confirm("Are you sure you want to clean up all raw statement dump rows from Google Sheets?")) return;
+            cleanupBtn.disabled = true;
+            cleanupBtn.textContent = "⏳ Cleaning...";
+            try {
+                const res = await fetch("/api/cleanup-statement-dumps", { method: "POST" });
+                const data = await res.json();
+                alert(`✅ ${data.message}`);
+                fetchAdminTransactions();
+                loadBankLedgerStatement();
+                fetchDashboardStats();
+            } catch (err) {
+                alert("Cleanup error: " + err.message);
+            } finally {
+                cleanupBtn.disabled = false;
+                cleanupBtn.textContent = "🧹 Cleanup Dumped Statement Rows";
+            }
+        };
+    }
 }
 
 async function deleteEmployee(userId, name) {
@@ -466,15 +488,19 @@ async function fetchAdminTransactions() {
         if (res.ok) {
             const data = await res.json();
             const txs = data.transactions || [];
-            allLedgerTransactions = txs;
+            // Filter out raw statement header dumps from Master Tasks Table
+            const cleanTxs = txs.filter(t => {
+                const text = `${t.purpose} ${t.receiver_name} ${t.sender_name} ${t.reference_number}`.toLowerCase();
+                return !text.includes("statement of account") && !text.includes("page of date description");
+            });
 
-            if (txs.length === 0) {
+            if (cleanTxs.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #94a3b8;">No task or payment records found.</td></tr>`;
                 return;
             }
 
             let html = "";
-            txs.forEach(t => {
+            cleanTxs.forEach(t => {
                 const statusPill = getStatusPill(t.status);
                 const pct = parseInt(t.progress_pct) || (t.status === "Completed" ? 100 : 0);
                 

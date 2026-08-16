@@ -816,101 +816,51 @@ function handleBulkStatementFile(file) {
 // Handles multiline date-blocks correctly (Bank Alfalah style)
 // ---------------------------------------------------------------
 function parseCsvBankStatement(rawText) {
-    // Step 1: Split into lines and clean
     const rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-
-    // Step 2: Remove header/footer junk lines
-    const SKIP_PATTERNS = [
-        /^page\s+\d+\s+of\s+\d+/i,
-        /^statement\s+of\s+account/i,
-        /^date\s+description\s+cheq/i,
-        /^date\s+particulars/i,
-        /^account\s+(no|number|title)/i,
-        /^branch\s+(code|name)/i,
-        /^raiwind\s+road/i,
-        /^lahore/i,
-        /^currency\s*:/i,
-        /^period\s*:/i,
-        /^from\s+date\s*:/i,
-        /^to\s+date\s*:/i,
-        /^customer\s+(name|id)/i,
-        /^bank\s+alfalah/i,
-        /^meezan\s+bank/i,
-        /^habib\s+bank/i,
-        /^ubl\s+/i,
-        /^mcb\s+/i,
-        /^opening\s+balance/i,
-        /^closing\s+balance/i,
-        /^debit\s+credit\s+balance/i,
-        /^\*+/,
-        /^-{3,}/,
-        /^\s*$/
-    ];
-
-    const cleanLines = rawLines.filter(line => {
-        return !SKIP_PATTERNS.some(pat => pat.test(line));
-    });
-
     const results = [];
 
-    // Step 3: Try Bank Alfalah multiline date-block parsing
-    // Each transaction block starts with a date like "02-01-2026" or "14/11/2025"
-    const DATE_BLOCK_REGEX = /^\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}$/;
-    const DATE_INLINE_REGEX = /^(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})\s+(.+)$/;
+    const isJunkHeader = (l) => {
+        const s = l.toLowerCase();
+        return s.startsWith("page ") || s.startsWith("statement of account") || 
+               s.startsWith("raiwind road") || s.startsWith("title of account") ||
+               s.startsWith("registered address") || s.startsWith("registered contact") ||
+               s.startsWith("date description") || s.startsWith("opening balance") ||
+               s.startsWith("from date:") || s.startsWith("to date:") || s.startsWith("iban");
+    };
 
-    // Try to group lines into date blocks (Bank Alfalah PDF style)
+    const cleanLines = rawLines.filter(l => !isJunkHeader(l));
+
+    const DATE_REGEX = /^(\d{1,2}[-/\s]\d{1,2}[-/\s]\d{2,4})\b/;
     const blocks = [];
     let currentBlock = null;
 
     for (const line of cleanLines) {
-        const isDateLine = DATE_BLOCK_REGEX.test(line);
-        const inlineMatch = line.match(DATE_INLINE_REGEX);
-
-        if (isDateLine) {
-            // Date alone on line — start new block
+        const dateMatch = line.match(DATE_REGEX);
+        if (dateMatch) {
             if (currentBlock) blocks.push(currentBlock);
-            currentBlock = { date: line, lines: [] };
-        } else if (inlineMatch) {
-            // Date + rest on same line (e.g. "02-01-2026  IBFT...  17,000  7,309,834.63")
-            // This is the MAIN Bank Alfalah pattern after Y-grouping fix
-            if (currentBlock) blocks.push(currentBlock);
-            currentBlock = { date: inlineMatch[1], lines: [inlineMatch[2]] };
+            currentBlock = {
+                date: dateMatch[1],
+                lines: [line]
+            };
         } else if (currentBlock) {
-            // Continuation line for current block (multi-line description)
             currentBlock.lines.push(line);
         }
     }
     if (currentBlock) blocks.push(currentBlock);
 
-    // Step 4: Parse each block into a transaction object
-    // Bank Alfalah column order (right side of row): ... | Debit | Credit | Balance
-    // So last number = Running Balance (skip it), second-to-last = Credit (if any), before that = Debit
-    const AMT_REGEX = /\b(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b/g;
-
     for (const block of blocks) {
-        const fullText = block.lines.join(' ');
-        const dateStr = block.date;
+        const dateStr = formatDateIso(block.date);
+        const fullText = block.lines.join(" ");
 
-        if (fullText.length < 3) continue;
+        if (fullText.toLowerCase().includes("opening balance")) continue;
 
-        // Extract all numbers >= 100 (excludes page numbers, ref codes < 100)
-        const allNums = [];
-        let m;
-        AMT_REGEX.lastIndex = 0;
-        while ((m = AMT_REGEX.exec(fullText)) !== null) {
-            const val = parseFloat(m[1].replace(/,/g, ''));
-            // Exclude: page numbers, years, small integers
-            if (val >= 100 && val !== 2026 && val !== 2025 && val !== 2024 && val !== 180) {
-                allNums.push(val);
-            }
-        }
+        const isCredit = /\bac transfer cr\b|\bcredit\b|\bdeposit\b|\breceived\b/i.test(fullText);
 
-        // Extract receiver name — Bank Alfalah IBFT To [NAME] - [BANK] pattern
-        let receiverName = '';
-        let accountNumber = '';
+        let receiverName = "";
+        let accountNumber = "";
 
-        const ibftToMatch = fullText.match(/\bTo\s+([A-Z][A-Z\s\(\)]{2,45}?)\s*[-–]\s*(?:[A-Z][A-Za-z\s]+(?:Bank|Easypaisa|JazzCash|Telenor|Meezan|Allied|MCB|HBL|UBL|Faysal|Silk|Limited))/i);
-        if (ibftToMatch) receiverName = ibftToMatch[1].trim();
+        const toMatch = fullText.match(/\bTo\s+([A-Z\s]{2,40}?)\s*[-–]/i);
+        if (toMatch) receiverName = toMatch[1].trim();
 
         const phoneMatch = fullText.match(/\b(0[23]\d{9})\b/);
         const ibanMatch = fullText.match(/\b(PK\d{2}[A-Z]{4}\d{16})\b/);
@@ -919,78 +869,58 @@ function parseCsvBankStatement(rawText) {
         else if (ibanMatch) accountNumber = ibanMatch[1];
         else if (longNumMatch) accountNumber = longNumMatch[1];
 
-        // Determine debit vs credit direction from keywords
-        const isCredit = /\bcredit\b|\bdeposit\b|\breceived\b|\bsalary\b|\breceipt\b/i.test(fullText);
-        const isDebit = /\bibft\b|\bpayment\b|\btransfer\b|\bdebit\b|\bwithdrawal\b|\boutward\b/i.test(fullText);
+        // Parse numbers from last line (Bank Alfalah has Debit/Credit + Running Balance on last line)
+        const lastLine = block.lines[block.lines.length - 1] || fullText;
+        const numMatches = (lastLine.match(/\b\d+(?:\.\d{1,2})?\b/g) || [])
+            .map(n => parseFloat(n))
+            .filter(n => n >= 100 && n !== 2026 && n !== 2025 && n !== 2024 && n !== 180 && n !== 33);
 
-        let debit = 0;
-        let credit = 0;
+        let debit = 0.0;
+        let credit = 0.0;
 
-        if (allNums.length === 0) {
-            if (!receiverName) continue;
-            // No amounts but has a receiver — record with 0 amount
-        } else if (allNums.length === 1) {
-            // Only one amount — it IS the transaction amount (not balance)
-            if (isCredit && !isDebit) credit = allNums[0];
-            else debit = allNums[0];
-        } else if (allNums.length === 2) {
-            // Two numbers: [transaction_amount, running_balance]
-            // The LAST number is always the running balance — take the first as transaction
-            if (isCredit && !isDebit) credit = allNums[0];
-            else debit = allNums[0];
-        } else if (allNums.length >= 3) {
-            // Three or more numbers: could be [Debit, Credit, Balance] or [Debit, Balance] etc.
-            // Bank Alfalah: if debit transaction → [debit_amount, running_balance]
-            //               if credit transaction → [credit_amount, running_balance]
-            //               rarely both → [debit_amount, credit_amount, running_balance]
-            //
-            // Strategy: last number is always running balance (largest or very large)
-            // Compare first two numbers — whichever matches keyword direction is the transaction amount
-            const t1 = allNums[0];
-            const t2 = allNums[1];
-            const last = allNums[allNums.length - 1];
-
-            if (isCredit && !isDebit) {
-                credit = t1;
-            } else if (isDebit && !isCredit) {
-                debit = t1;
-            } else {
-                // Both or neither keyword — use position: smaller = tx amount, larger = balance
-                if (t1 < t2 && t2 > t1 * 2) {
-                    debit = t1; // t2 is likely balance
-                } else if (t2 < t1 && t1 > t2 * 2) {
-                    debit = t2;
-                } else {
-                    debit = t1;
-                }
+        if (isCredit) {
+            if (numMatches.length >= 2) {
+                credit = numMatches[numMatches.length - 2];
+            } else if (numMatches.length === 1) {
+                credit = numMatches[0];
+            }
+        } else {
+            // Debit IBFT Transaction
+            if (numMatches.length >= 2) {
+                debit = numMatches[numMatches.length - 2];
+            } else if (numMatches.length === 1) {
+                debit = numMatches[0];
             }
         }
 
-        const amt = credit > 0 ? credit : debit;
-        if (amt < 100 && !receiverName) continue;
+        const amtVal = credit > 0 ? credit : debit;
+        if (amtVal === 0 && !receiverName) continue;
 
-        // Clean particulars text — remove phone/IBAN/long numbers
-        const particularsClean = fullText
+        let cleanParticulars = fullText
             .replace(/\b0[23]\d{9}\b/g, '')
             .replace(/\bPK\d{2}[A-Z]{4}\d{16}\b/g, '')
             .replace(/\b\d{10,16}\b/g, '')
-            .replace(/\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b/g, '') // remove amounts from desc
-            .replace(/\s{2,}/g, ' ')
-            .trim()
-            .substring(0, 200) || 'Bank Statement Transaction';
+            .replace(/\b\d+(?:\.\d{1,2})?\b/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (!cleanParticulars) cleanParticulars = isCredit ? "Account Transfer Credit" : "IBFT Transfer Payment";
 
         results.push({
-            date: formatDateIso(dateStr),
-            particulars: particularsClean,
+            date: dateStr,
+            particulars: cleanParticulars.substring(0, 200),
             receiver_name: receiverName,
             account_number: accountNumber,
             reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
             debit: debit,
             credit: credit,
-            amount: amt.toString(),
-            transaction_type: credit > 0 ? 'Credit' : 'Payment'
+            amount: amtVal.toString(),
+            transaction_type: isCredit ? "Credit" : "Payment"
         });
     }
+
+    return results;
+}
 
     // Step 5: Fallback to simple CSV parsing if no date-blocks were found
     if (results.length === 0) {
@@ -1187,8 +1117,8 @@ function renderBankLedgerTable() {
         const amtStr = strToFloat(t.amount);
         const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
         
-        const debitVal = isCredit ? 0.0 : amtStr;
-        const creditVal = isCredit ? amtStr : 0.0;
+        const debitVal = (typeof t.debit === "number" && t.debit > 0) ? t.debit : (isCredit ? 0.0 : amtStr);
+        const creditVal = (typeof t.credit === "number" && t.credit > 0) ? t.credit : (isCredit ? amtStr : 0.0);
 
         currentBalance = currentBalance - debitVal + creditVal;
 

@@ -39,7 +39,7 @@ def get_google_sheet_tabs():
             "reference_number", "date", "time", "amount", "currency", 
             "sender_name", "sender_account", "receiver_name", "receiver_account", 
             "purpose", "transaction_type", "images_json", "logged_by", 
-            "status", "progress_pct", "employee_id", "id"
+            "status", "progress_pct", "employee_id", "id", "debit", "credit"
         ]
         ws_tx = sh.add_worksheet(title="transactions", rows=1000, cols=len(tx_headers))
         ws_tx.append_row(tx_headers)
@@ -47,7 +47,7 @@ def get_google_sheet_tabs():
     # Check and upgrade headers if existing sheet has old columns
     try:
         headers = ws_tx.row_values(1)
-        needed = ["status", "progress_pct", "employee_id", "id"]
+        needed = ["status", "progress_pct", "employee_id", "id", "debit", "credit"]
         for h in needed:
             if h not in headers:
                 ws_tx.update_cell(1, len(headers) + 1, h)
@@ -210,7 +210,7 @@ def app(environ, start_response):
         start_response(status, headers)
         return res
 
-    # 1. Flexible & Robust Login Endpoint
+    # 1. Login Endpoint
     if path == "/api/login" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0"))
@@ -228,7 +228,6 @@ def app(environ, start_response):
 
             found_user = None
 
-            # Hardcoded Built-in Fallbacks for default Admin and Employee
             if username == "admin" and (pin_code == "1234" or password in ["admin", "admin123", "1234"]):
                 found_user = {
                     "user_id": "usr_admin",
@@ -246,7 +245,6 @@ def app(environ, start_response):
                     "token": f"token_usr_emp1_{uuid.uuid4().hex[:8]}"
                 }
 
-            # Search Google Sheets users tab
             if not found_user:
                 try:
                     ws_tx, ws_users, sid = get_google_sheet_tabs()
@@ -296,7 +294,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 2. Get Users (Returns Plain Passwords and PIN Codes for Admin)
+    # 2. Get Users
     if path == "/api/users" and method == "GET":
         try:
             ws_tx, ws_users, sid = get_google_sheet_tabs()
@@ -337,7 +335,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 3. Create User (Admin Only)
+    # 3. Create User
     if path == "/api/users" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0"))
@@ -367,7 +365,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # Delete User (Admin Only)
+    # Delete User
     if path == "/api/delete-user" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0"))
@@ -397,7 +395,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # Delete Transaction / Record (Admin Only)
+    # Delete Transaction / Record (Admin Only) - Searches all row columns
     if path == "/api/delete-transaction" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0"))
@@ -416,7 +414,6 @@ def app(environ, start_response):
             deleted = False
             if len(rows) > 1:
                 for idx, r in enumerate(rows[1:], start=2):
-                    # Search across ALL columns: col 0 (ref), col 16 (id), any column
                     row_vals = [str(v).strip() for v in r]
                     if target_id in row_vals:
                         ws_tx.delete_rows(idx)
@@ -426,7 +423,7 @@ def app(environ, start_response):
             if deleted:
                 status, headers, res = _json(200, {"message": "Transaction deleted successfully."})
             else:
-                status, headers, res = _json(400, {"error": f"Transaction ID '{target_id}' not found in any row."})
+                status, headers, res = _json(400, {"error": f"Transaction ID '{target_id}' not found."})
             start_response(status, headers)
             return res
         except Exception as e:
@@ -434,7 +431,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # Cleanup All Data — Wipe all transaction rows (Admin Only)
+    # Cleanup Statement Dumps or Wipe All Transactions
     if path == "/api/cleanup-statement-dumps" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0") or "0")
@@ -447,26 +444,19 @@ def app(environ, start_response):
 
             deleted_count = 0
             if wipe_all:
-                # Nuke ALL rows except the header row
+                # Nuke ALL transaction rows except the header row
                 if len(rows) > 1:
-                    total_data_rows = len(rows) - 1
-                    # Delete from bottom up to preserve row indices
                     for idx in range(len(rows), 1, -1):
                         ws_tx.delete_rows(idx)
                         deleted_count += 1
             else:
-                # Smart cleanup: delete rows with junk data
+                # Delete junk/dump rows or rows with 0 amount
                 JUNK_PATTERNS = [
-                    "statement of account",
-                    "page of date description",
-                    "raiwind road branch",
-                    "cheq/inst",
-                    "date description",
-                    "opening balance",
-                    "closing balance",
-                    "ibft from fast engineering",  # header-style dumps
+                    "statement of account", "page of date description", "raiwind road branch",
+                    "cheq/inst", "date description", "opening balance", "closing balance",
+                    "ibft from fast engineering solutions"
                 ]
-                JUNK_AMOUNTS = ["33", "180", "2026", "2025", "2024", "1", "0"]
+                JUNK_AMOUNTS = ["33", "180", "2026", "2025", "2024", "1", "0", "0.0", "0.00"]
 
                 for idx in range(len(rows), 1, -1):
                     r = rows[idx - 1]
@@ -475,18 +465,24 @@ def app(environ, start_response):
                         deleted_count += 1
                         continue
                     full_str = " ".join([str(x) for x in r]).lower()
-                    amt_col = str(r[3]).strip() if len(r) > 3 else ""
+                    amt_col = str(r[3]).replace(",", "").strip() if len(r) > 3 else "0"
+                    
+                    try:
+                        amt_val = float(amt_col) if amt_col else 0.0
+                    except ValueError:
+                        amt_val = 0.0
+
                     is_junk = (
                         any(p in full_str for p in JUNK_PATTERNS)
                         or amt_col in JUNK_AMOUNTS
-                        or (amt_col and not any(c.isdigit() for c in amt_col))
+                        or amt_val == 0.0
                     )
                     if is_junk:
                         ws_tx.delete_rows(idx)
                         deleted_count += 1
 
             status, headers, res = _json(200, {
-                "message": f"Cleaned up {deleted_count} rows {'(ALL data wiped)' if wipe_all else '(junk rows removed)'}.",
+                "message": f"Cleaned up {deleted_count} rows {'(ALL transactions wiped)' if wipe_all else '(junk & zero-amount rows removed)'}.",
                 "deleted_count": deleted_count
             })
             start_response(status, headers)
@@ -496,7 +492,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 4. Get Dashboard Stats (Admin Only)
+    # 4. Get Dashboard Stats
     if path == "/api/dashboard-stats" and method == "GET":
         try:
             ws_tx, ws_users, sid = get_google_sheet_tabs()
@@ -553,7 +549,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 5. Get Transactions List (Filtered by Role)
+    # 5. Get Transactions List (Returns Debit/Credit fields)
     if path == "/api/transactions" and method == "GET":
         try:
             query_str = environ.get("QUERY_STRING", "")
@@ -576,25 +572,49 @@ def app(environ, start_response):
                     r_status = r[13] if len(r) > 13 and r[13] else "Pending"
                     r_progress = r[14] if len(r) > 14 and r[14] else "0%"
                     r_imgs = r[11] if len(r) > 11 and r[11] else "[]"
+                    tx_type_str = r[10] if len(r) > 10 else "Payment"
+
+                    amt_val = 0.0
+                    try:
+                        amt_val = float(str(r[3]).replace(",", "").strip())
+                    except ValueError:
+                        amt_val = 0.0
+
+                    deb_val = 0.0
+                    cred_val = 0.0
+                    if len(r) > 17 and r[17] != "":
+                        try: deb_val = float(str(r[17]).replace(",", "").strip())
+                        except ValueError: deb_val = 0.0
+                    if len(r) > 18 and r[18] != "":
+                        try: cred_val = float(str(r[18]).replace(",", "").strip())
+                        except ValueError: cred_val = 0.0
+
+                    if deb_val == 0.0 and cred_val == 0.0 and amt_val > 0.0:
+                        if tx_type_str.lower() in ["credit", "deposit"]:
+                            cred_val = amt_val
+                        else:
+                            deb_val = amt_val
 
                     item = {
                         "id": r_id,
                         "reference_number": r[0] if len(r) > 0 else "",
                         "date": r[1] if len(r) > 1 else "",
                         "time": r[2] if len(r) > 2 else "",
-                        "amount": r[3] if len(r) > 3 else "",
+                        "amount": str(amt_val),
                         "currency": r[4] if len(r) > 4 and r[4] else "PKR",
                         "sender_name": r[5] if len(r) > 5 else "",
                         "sender_account": r[6] if len(r) > 6 else "",
                         "receiver_name": r[7] if len(r) > 7 else "",
                         "receiver_account": r[8] if len(r) > 8 else "",
                         "purpose": r[9] if len(r) > 9 else "",
-                        "transaction_type": r[10] if len(r) > 10 else "Payment",
+                        "transaction_type": tx_type_str,
                         "images_json": r_imgs,
                         "logged_by": r_logged,
                         "status": r_status,
                         "progress_pct": r_progress,
-                        "employee_id": r_emp_id
+                        "employee_id": r_emp_id,
+                        "debit": deb_val,
+                        "credit": cred_val
                     }
 
                     if role == "employee":
@@ -615,7 +635,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 6. Update Status & Progress (Admin Only)
+    # 6. Update Status & Progress
     if path == "/api/update-status" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0"))
@@ -633,8 +653,8 @@ def app(environ, start_response):
             updated = False
             if len(rows) > 1:
                 for idx, r in enumerate(rows[1:], start=2):
-                    r_id = r[16] if len(r) > 16 and r[16] else ""
-                    if (tx_id and r_id == tx_id) or (tx_id and r[0] == tx_id):
+                    row_vals = [str(v).strip() for v in r]
+                    if tx_id in row_vals:
                         ws_tx.update_cell(idx, 14, new_status)
                         ws_tx.update_cell(idx, 15, new_progress)
                         if assign_emp:
@@ -713,7 +733,9 @@ def app(environ, start_response):
                 initial_status,
                 initial_progress,
                 emp_id,
-                tx_id
+                tx_id,
+                extracted.get("debit", extracted.get("amount", "0")),
+                extracted.get("credit", "0")
             ]
             
             force_save = data.get("force_save", False)
@@ -723,31 +745,6 @@ def app(environ, start_response):
             extracted["id"] = tx_id
             extracted["status"] = initial_status
             extracted["progress_pct"] = initial_progress
-
-            # Duplicate Payment Check
-            if not force_save:
-                try:
-                    all_rows = ws_tx.get_all_values()
-                    target_amt = str(extracted.get("amount", "")).replace(",", "").strip()
-                    target_rec = str(extracted.get("receiver_name", "")).strip().lower()
-                    target_ref = str(extracted.get("reference_number", "")).strip()
-
-                    if len(all_rows) > 1:
-                        for r in all_rows[1:]:
-                            if len(r) < 8:
-                                continue
-                            r_ref, r_date, r_time, r_amt, r_rec = str(r[0]).strip(), str(r[1]).strip(), str(r[2]).strip(), str(r[3]).replace(",", "").strip(), str(r[7]).strip().lower()
-                            if (target_ref and r_ref and target_ref == r_ref) or (target_amt and r_amt and target_amt == r_amt and target_rec and target_rec in r_rec):
-                                status, headers, res = _json(200, {
-                                    "is_duplicate": True,
-                                    "saved": False,
-                                    "duplicate_info": {"date": r_date, "time": r_time, "amount": r[3], "receiver_name": r[7], "reference_number": r_ref},
-                                    "extracted_data": extracted
-                                })
-                                start_response(status, headers)
-                                return res
-                except Exception as check_err:
-                    print("Duplicate check warning:", check_err)
 
             ws_tx.append_row(row)
             extracted["is_duplicate"] = False
@@ -762,7 +759,7 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # 8. Bulk Statement Upload Endpoint (Appends whole bank statements)
+    # 8. Bulk Statement Upload Endpoint (Saves Debit & Credit explicitly)
     if path == "/api/bulk-upload-statement" and method == "POST":
         try:
             length = int(environ.get("CONTENT_LENGTH", "0"))
@@ -794,15 +791,26 @@ def app(environ, start_response):
             skipped_count = 0
 
             for item in items:
-                ref_num = str(item.get("reference_number") or item.get("id") or f"tx_{uuid.uuid4().hex[:8]}").strip()
+                ref_num = str(item.get("reference_number") or item.get("id") or f"ref_{uuid.uuid4().hex[:7]}").strip()
                 item_date = str(item.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
                 item_time = str(item.get("time") or datetime.now().strftime("%I:%M %p")).strip()
-                amt_str = str(item.get("amount") or "0").replace(",", "").strip()
+                
+                debit_val = float(item.get("debit") or 0)
+                credit_val = float(item.get("credit") or 0)
+                amt_val = credit_val if credit_val > 0 else debit_val
+                if amt_val == 0:
+                    try: amt_val = float(str(item.get("amount") or 0).replace(",", ""))
+                    except ValueError: amt_val = 0.0
+
+                if amt_val == 0.0:
+                    continue  # Ignore zero amount junk rows!
+
+                amt_str = str(amt_val)
                 curr = str(item.get("currency") or "PKR").strip()
                 sender = str(item.get("sender_name") or "").strip()
                 receiver = str(item.get("receiver_name") or item.get("particulars") or "").strip()
                 purpose = str(item.get("purpose") or item.get("particulars") or "Bank Statement Import").strip()
-                tx_type = str(item.get("transaction_type") or "Payment").strip()
+                tx_type = str(item.get("transaction_type") or ("Credit" if credit_val > 0 else "Payment")).strip()
                 tx_id = f"tx_{uuid.uuid4().hex[:8]}"
 
                 sig_key = f"{item_date}_{amt_str}_{receiver.lower()}"
@@ -819,7 +827,7 @@ def app(environ, start_response):
                     sender,
                     "",
                     receiver,
-                    "",
+                    item.get("account_number", ""),
                     purpose,
                     tx_type,
                     "[]",
@@ -827,7 +835,9 @@ def app(environ, start_response):
                     "Completed",
                     "100%",
                     "",
-                    tx_id
+                    tx_id,
+                    str(debit_val),
+                    str(credit_val)
                 ]
 
                 new_rows_to_append.append(row)

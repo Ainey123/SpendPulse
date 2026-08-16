@@ -823,14 +823,16 @@ function parseCsvBankStatement(rawText) {
         const s = l.toLowerCase();
         return s.startsWith("page ") || s.startsWith("statement of account") || 
                s.startsWith("raiwind road") || s.startsWith("title of account") ||
-               s.startsWith("registered address") || s.startsWith("registered contact") ||
-               s.startsWith("date description") || s.startsWith("opening balance") ||
-               s.startsWith("from date:") || s.startsWith("to date:") || s.startsWith("iban");
+               s.startsWith("house no.52") || s.startsWith("registered address") ||
+               s.startsWith("registered contact") || s.startsWith("date description") ||
+               s.startsWith("opening balance") || s.startsWith("from date:") ||
+               s.startsWith("to date:") || s.startsWith("iban");
     };
 
     const cleanLines = rawLines.filter(l => !isJunkHeader(l));
 
-    const DATE_REGEX = /^(\d{1,2}[-/\s]\d{1,2}[-/\s]\d{2,4})\b/;
+    // Bank Alfalah Date Format: DD-MM-YYYY or DD/MM/YYYY
+    const DATE_REGEX = /^(\d{2})[-\/](\d{2})[-\/](\d{4})\b/;
     const blocks = [];
     let currentBlock = null;
 
@@ -839,7 +841,10 @@ function parseCsvBankStatement(rawText) {
         if (dateMatch) {
             if (currentBlock) blocks.push(currentBlock);
             currentBlock = {
-                date: dateMatch[1],
+                day: dateMatch[1],
+                month: dateMatch[2],
+                year: dateMatch[3],
+                isoDate: `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`, // Convert DD-MM-YYYY -> YYYY-MM-DD
                 lines: [line]
             };
         } else if (currentBlock) {
@@ -849,18 +854,28 @@ function parseCsvBankStatement(rawText) {
     if (currentBlock) blocks.push(currentBlock);
 
     for (const block of blocks) {
-        const dateStr = formatDateIso(block.date);
         const fullText = block.lines.join(" ");
-
         if (fullText.toLowerCase().includes("opening balance")) continue;
 
-        const isCredit = /\bac transfer cr\b|\bcredit\b|\bdeposit\b|\breceived\b/i.test(fullText);
+        // Credit detection for Bank Alfalah:
+        // "Ac Transfer Cr", "IBFT From CMS", "Cheque Deposited", or "Funds Transfer From RAAST"
+        const isCredit = /\bAc Transfer Cr\b|\bIBFT From CMS\b|\bCheque Deposited\b|\bCredit\b|\bdeposit\b/i.test(fullText)
+                         && !/\bTo\s+[A-Z]/i.test(fullText);
 
         let receiverName = "";
         let accountNumber = "";
 
-        const toMatch = fullText.match(/\bTo\s+([A-Z\s]{2,40}?)\s*[-–]/i);
-        if (toMatch) receiverName = toMatch[1].trim();
+        // Extract Receiver Name: "To NAZEER ALLAH - JazzCash..."
+        const toMatch = fullText.match(/\bTo\s+([A-Z][A-Za-z0-9\s\/\(\)\.\&\-]{2,50}?)\s*[-–]\s*(?:[A-Z][A-Za-z\s]+(?:Bank|Easypaisa|JazzCash|Telenor|Meezan|Allied|MCB|HBL|UBL|Faysal|Silk|Limited|Askari|Soneri|BankIslami|JS Bank|Dubai Islamic|Standard Chartered|Microfinance))/i)
+                     || fullText.match(/\bTo\s+([A-Z][A-Z\s]{2,40}?)\s*[-–]/);
+        if (toMatch) {
+            receiverName = toMatch[1].trim();
+        }
+
+        if (!receiverName) {
+            const raastMatch = fullText.match(/\bto\s+([A-Z][A-Za-z0-9\s\/\(\)\.\&]{2,40}?)\s+PK\d{2}/i);
+            if (raastMatch) receiverName = raastMatch[1].trim();
+        }
 
         const phoneMatch = fullText.match(/\b(0[23]\d{9})\b/);
         const ibanMatch = fullText.match(/\b(PK\d{2}[A-Z]{4}\d{16})\b/);
@@ -870,52 +885,56 @@ function parseCsvBankStatement(rawText) {
         else if (longNumMatch) accountNumber = longNumMatch[1];
 
         // ── Amount Extraction ──────────────────────────────────────────────────
-        // IMPORTANT: Bank Alfalah uses comma-formatted amounts: 17,000.00
-        // Regex MUST match comma-thousands format, then strip commas for parseFloat
+        // Match numbers like 17000, 17,000.00, 690,553.82, 7309834.63
         const AMT_CANDIDATES = fullText.match(/\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b/g) || [];
         const EXCLUDE_YEARS = new Set([2026, 2025, 2024, 2023, 2022, 180, 33]);
 
-        const numMatches = AMT_CANDIDATES
-            .map(s => parseFloat(s.replace(/,/g, '')))
-            .filter(n => {
-                if (isNaN(n) || n < 100) return false;          // too small (page numbers)
-                if (EXCLUDE_YEARS.has(n)) return false;          // years / known junk
-                if (n > 99999999) return false;                  // long account/phone numbers
-                return true;
-            });
+        const cleanNums = [];
+        for (const numStr of AMT_CANDIDATES) {
+            const val = parseFloat(numStr.replace(/,/g, ''));
+            if (isNaN(val)) continue;
+            if (val === parseInt(block.day) || val === parseInt(block.month) || val === parseInt(block.year)) continue;
+            if (EXCLUDE_YEARS.has(val)) continue;
+            if (val > 99999999 && !numStr.includes('.')) continue; // Account / Phone number
+            cleanNums.push(val);
+        }
 
         let debit  = 0.0;
         let credit = 0.0;
         let txAmt  = 0.0;
 
-        // Bank Alfalah column layout (right side): Amount | Running Balance
-        // So numMatches[0] = transaction amount, last = running balance
-        if (numMatches.length >= 1) {
-            txAmt = numMatches[0];
+        // In Bank Alfalah row layout: [Amount, Running Balance]
+        // So cleanNums[cleanNums.length - 2] is ALWAYS the transaction amount!
+        if (cleanNums.length >= 2) {
+            txAmt = cleanNums[cleanNums.length - 2];
+        } else if (cleanNums.length === 1) {
+            txAmt = cleanNums[0];
         }
 
         if (isCredit) {
             credit = txAmt;
+            debit = 0.0;
         } else {
             debit = txAmt;
+            credit = 0.0;
         }
 
         const amtVal = credit > 0 ? credit : debit;
         if (amtVal === 0 && !receiverName) continue;
 
         let cleanParticulars = fullText
+            .replace(/^(\d{2})[-\/](\d{2})[-\/](\d{4})\s*/, '')
             .replace(/\b0[23]\d{9}\b/g, '')
             .replace(/\bPK\d{2}[A-Z]{4}\d{16}\b/g, '')
             .replace(/\b\d{10,16}\b/g, '')
-            .replace(/\b\d+(?:\.\d{1,2})?\b/g, '')
             .replace(/\s+/g, ' ')
             .trim();
 
         if (!cleanParticulars) cleanParticulars = isCredit ? "Account Transfer Credit" : "IBFT Transfer Payment";
 
         results.push({
-            date: dateStr,
-            particulars: cleanParticulars.substring(0, 200),
+            date: block.isoDate, // YYYY-MM-DD
+            particulars: cleanParticulars.substring(0, 250),
             receiver_name: receiverName,
             account_number: accountNumber,
             reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
@@ -926,7 +945,7 @@ function parseCsvBankStatement(rawText) {
         });
     }
 
-    // Step 5: Fallback to simple CSV parsing if no date-blocks were found
+    // Fallback to simple CSV parsing if no date-blocks were found
     if (results.length === 0) {
         for (const line of cleanLines) {
             const parts = line.split(/,|\t/).map(p => p.trim());

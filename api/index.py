@@ -156,17 +156,21 @@ def call_gemini_statement_table(base64_data, mime_type="image/png"):
         return None
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-    prompt = """This document is a bank statement table. Extract ALL transaction rows into a JSON array of objects. 
-Each object must have:
-- "date": "YYYY-MM-DD" format
-- "particulars": string description of payment/deposit
-- "reference_number": string instrument or reference number (or empty string if none)
-- "debit": numeric debit amount (0 if credit)
-- "credit": numeric credit amount (0 if debit)
-- "amount": numeric string of transaction amount
-- "transaction_type": "Payment" or "Credit"
+    prompt = """This document is an official Bank Statement Of Account (e.g. Bank Alfalah, Meezan Bank, HBL, UBL, Allied Bank, JazzCash, Easypaisa, etc.).
+Extract EVERY SINGLE transaction entry in the document across all pages into a JSON array of objects.
 
-Return ONLY valid JSON in format: {"transactions": [...]}. Do not include markdown code blocks."""
+For each transaction entry, extract:
+- "date": "YYYY-MM-DD" format (convert dates like "02-01-2026" or "14-Nov-2025" to "YYYY-MM-DD")
+- "particulars": full description text including recipient name, recipient bank name, and account/mobile number
+- "receiver_name": recipient person or entity name (e.g. "NAZEER ALLAH", "REHMAN ALI", "MUHAMMAD IMRAN", "NAVEED AKRAM", "ASIF RASHEED")
+- "account_number": recipient mobile number or account/IBAN number if present (e.g. "03038436423", "0457300609374", "03224831985")
+- "reference_number": instrument / cheque or reference number if present (e.g. "REP MAINT OFFICE", "PK80ALFH00760010", "FT IBALFA-RAAST", "FT260130BVLMQN7Y")
+- "debit": numeric debit amount sent out (0 if credit/deposit)
+- "credit": numeric credit amount received in (0 if debit/payment)
+- "amount": numeric string of the transaction amount
+- "transaction_type": "Payment" if debit > 0 else "Credit"
+
+Return ONLY valid JSON in format: {"transactions": [...]}. Do not include markdown code block backticks."""
     
     payload = {
         "contents": [{

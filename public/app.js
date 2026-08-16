@@ -932,6 +932,13 @@ function renderBankLedgerTable() {
     const dateFromStr = document.getElementById("ledgerDateFrom")?.value || "";
     const dateToStr = document.getElementById("ledgerDateTo")?.value || "";
 
+    const banner = document.getElementById("ledgerSearchSummaryBanner");
+    const bannerTitle = document.getElementById("searchSummaryTitle");
+    const bannerCount = document.getElementById("searchSummaryCount");
+    const bannerDebit = document.getElementById("searchSummaryDebit");
+    const bannerCredit = document.getElementById("searchSummaryCredit");
+    const bannerNet = document.getElementById("searchSummaryNet");
+
     const sorted = [...allLedgerTransactions].sort((a, b) => {
         const da = new Date(a.date + " " + (a.time || "00:00"));
         const db = new Date(b.date + " " + (b.time || "00:00"));
@@ -967,7 +974,7 @@ function renderBankLedgerTable() {
         let matches = true;
 
         if (searchQuery) {
-            const particulars = `${t.sender_name} ${t.receiver_name} ${t.purpose} ${t.transaction_type} ${t.reference_number}`.toLowerCase();
+            const particulars = `${t.sender_name} ${t.receiver_name} ${t.purpose} ${t.particulars} ${t.account_number} ${t.transaction_type} ${t.reference_number}`.toLowerCase();
             if (!particulars.includes(searchQuery)) matches = false;
         }
 
@@ -998,13 +1005,13 @@ function renderBankLedgerTable() {
                 `;
             }
 
-            const particularsText = t.purpose || `POS SALE / PAYMENT TO ${t.receiver_name || t.sender_name || 'MERCHANT'}`;
+            const particularsText = t.particulars || t.purpose || `POS SALE / PAYMENT TO ${t.receiver_name || t.sender_name || 'MERCHANT'}`;
             const instNo = t.reference_number || t.id;
 
             rowsHtml += `
                 <tr>
                     <td style="font-weight: 600;">${formattedDate}</td>
-                    <td><b>${particularsText}</b> ${t.sender_name ? `<br/><span style="font-size: 11px; color: #94a3b8;">From: ${t.sender_name} | To: ${t.receiver_name || 'N/A'}</span>` : ''}</td>
+                    <td><b>${particularsText}</b> ${t.sender_name || t.receiver_name ? `<br/><span style="font-size: 11px; color: #94a3b8;">Person: ${t.receiver_name || t.sender_name || 'N/A'} ${t.account_number ? `| Account/Phone: ${t.account_number}` : ''}</span>` : ''}</td>
                     <td><code>${instNo}</code></td>
                     <td class="debit-val" style="text-align: right;">${debitVal > 0 ? debitVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                     <td class="credit-val" style="text-align: right;">${creditVal > 0 ? creditVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
@@ -1019,6 +1026,18 @@ function renderBankLedgerTable() {
     }
 
     tbody.innerHTML = rowsHtml;
+
+    // Show Recipient & Account Live Search Summary Banner if search term or filter is active
+    if (searchQuery && banner) {
+        banner.classList.remove("hidden");
+        if (bannerTitle) bannerTitle.textContent = `👤 Person / Account Search Summary for "${searchQuery.toUpperCase()}"`;
+        if (bannerCount) bannerCount.textContent = `${renderedCount} Transactions Found`;
+        if (bannerDebit) bannerDebit.textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        if (bannerCredit) bannerCredit.textContent = `PKR ${totalCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        if (bannerNet) bannerNet.textContent = `PKR ${Math.abs(totalCredit - totalDebit).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    } else if (banner) {
+        banner.classList.add("hidden");
+    }
 
     document.getElementById("ledgerOpeningBal").textContent = `PKR ${DEFAULT_OPENING_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalDebit").textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;

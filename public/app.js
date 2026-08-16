@@ -869,33 +869,35 @@ function parseCsvBankStatement(rawText) {
         else if (ibanMatch) accountNumber = ibanMatch[1];
         else if (longNumMatch) accountNumber = longNumMatch[1];
 
-        // Parse numbers from fullText (Bank Alfalah has Debit/Credit + Running Balance)
-        const numMatches = (fullText.match(/\b\d+(?:\.\d{1,2})?\b/g) || [])
-            .map(n => parseFloat(n))
+        // ── Amount Extraction ──────────────────────────────────────────────────
+        // IMPORTANT: Bank Alfalah uses comma-formatted amounts: 17,000.00
+        // Regex MUST match comma-thousands format, then strip commas for parseFloat
+        const AMT_CANDIDATES = fullText.match(/\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b/g) || [];
+        const EXCLUDE_YEARS = new Set([2026, 2025, 2024, 2023, 2022, 180, 33]);
+
+        const numMatches = AMT_CANDIDATES
+            .map(s => parseFloat(s.replace(/,/g, '')))
             .filter(n => {
-                if (isNaN(n) || n < 100) return false;
-                if (n === 2026 || n === 2025 || n === 2024 || n === 180 || n === 33) return false;
-                if (n > 1000000000) return false; // Ignore long account/phone numbers
+                if (isNaN(n) || n < 100) return false;          // too small (page numbers)
+                if (EXCLUDE_YEARS.has(n)) return false;          // years / known junk
+                if (n > 99999999) return false;                  // long account/phone numbers
                 return true;
             });
 
-        let debit = 0.0;
+        let debit  = 0.0;
         let credit = 0.0;
-        let txAmt = 0.0;
+        let txAmt  = 0.0;
 
-        if (numMatches.length >= 2) {
-            // First number is Tx Amount, second is Running Balance
-            txAmt = numMatches[0];
-        } else if (numMatches.length === 1) {
+        // Bank Alfalah column layout (right side): Amount | Running Balance
+        // So numMatches[0] = transaction amount, last = running balance
+        if (numMatches.length >= 1) {
             txAmt = numMatches[0];
         }
 
         if (isCredit) {
             credit = txAmt;
-            debit = 0.0;
         } else {
             debit = txAmt;
-            credit = 0.0;
         }
 
         const amtVal = credit > 0 ? credit : debit;
@@ -956,14 +958,30 @@ function parseCsvBankStatement(rawText) {
 }
 
 function formatDateIso(dStr) {
-    if (!dStr) return new Date().toISOString().slice(0,10);
+    if (!dStr) return new Date().toISOString().slice(0, 10);
+
+    // ── Explicit DD-MM-YYYY / DD/MM/YYYY parser (Bank Alfalah format) ──────
+    // JS new Date() assumes MM-DD-YYYY which gives wrong month for these dates
+    const ddmmyyyy = String(dStr).match(/^(\d{1,2})[-\/\s](\d{1,2})[-\/\s](\d{2,4})$/);
+    if (ddmmyyyy) {
+        let day   = parseInt(ddmmyyyy[1], 10);
+        let month = parseInt(ddmmyyyy[2], 10);
+        let year  = parseInt(ddmmyyyy[3], 10);
+        if (year < 100) year += 2000;
+        // Sanity: if day > 12, definitely DD-MM. If both <= 12, assume DD-MM (Pakistani convention).
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            const y = String(year).padStart(4, '0');
+            const m = String(month).padStart(2, '0');
+            const d = String(day).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+    }
+
     try {
         const parsed = new Date(dStr);
-        if (!isNaN(parsed.getTime())) {
-            return parsed.toISOString().slice(0,10);
-        }
-    } catch(e) {}
-    return new Date().toISOString().slice(0,10);
+        if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+    } catch (e) {}
+    return new Date().toISOString().slice(0, 10);
 }
 
 function openBulkPreviewModal(items) {

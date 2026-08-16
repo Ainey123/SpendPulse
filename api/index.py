@@ -97,10 +97,17 @@ def ocr_extract_fields(img_bytes):
         "transaction_type": "Payment"
     }
 
-    amt_match = re.search(r'(?:PKR|RS|EUR|USD|\$)\s*([\d,]+(?:\.\d{2})?)', text, re.IGNORECASE) or \
-                re.search(r'\b([\d,]{3,}(?:\.\d{2})?)\b', text)
-    if amt_match:
-        data["amount"] = amt_match.group(1).replace(",", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if "page " in line.lower() or "statement of account" in line.lower() or "page" in line.lower():
+            continue
+        amt_match = re.search(r'(?:PKR|RS|EUR|USD|\$)\s*([\d,]+(?:\.\d{2})?)', line, re.IGNORECASE) or \
+                    re.search(r'\b([\d,]{3,}(?:\.\d{2})?)\b', line)
+        if amt_match:
+            cand = amt_match.group(1).replace(",", "")
+            if cand not in ["2026", "2025", "2024", "180", "33", "1"] and len(cand) < 10:
+                data["amount"] = cand
+                break
 
     date_match = re.search(r'\b(\d{1,2}[-/\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{1,2})[-/\s]\d{2,4})\b', text, re.IGNORECASE)
     if date_match:
@@ -115,7 +122,6 @@ def ocr_extract_fields(img_bytes):
     if ref_match:
         data["reference_number"] = ref_match.group(1)
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
     for i, line in enumerate(lines):
         if re.search(r'^\s*From\b', line, re.IGNORECASE) and i + 1 < len(lines):
             data["sender_name"] = lines[i+1]
@@ -384,6 +390,43 @@ def app(environ, start_response):
                 status, headers, res = _json(200, {"message": "Employee deleted successfully"})
             else:
                 status, headers, res = _json(400, {"error": "User not found"})
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
+    # Delete Transaction / Record (Admin Only)
+    if path == "/api/delete-transaction" and method == "POST":
+        try:
+            length = int(environ.get("CONTENT_LENGTH", "0"))
+            body = environ["wsgi.input"].read(length)
+            data = json.loads(body.decode("utf-8"))
+
+            target_id = str(data.get("transaction_id") or data.get("id") or "").strip()
+            if not target_id:
+                status, headers, res = _json(400, {"error": "transaction_id is required."})
+                start_response(status, headers)
+                return res
+
+            ws_tx, ws_users, sid = get_google_sheet_tabs()
+            rows = ws_tx.get_all_values()
+
+            deleted = False
+            if len(rows) > 1:
+                for idx, r in enumerate(rows[1:], start=2):
+                    r_id = r[16] if len(r) > 16 and r[16] else ""
+                    r_ref = r[0] if len(r) > 0 and r[0] else ""
+                    if target_id in [r_id, r_ref]:
+                        ws_tx.delete_rows(idx)
+                        deleted = True
+                        break
+
+            if deleted:
+                status, headers, res = _json(200, {"message": "Transaction deleted successfully."})
+            else:
+                status, headers, res = _json(400, {"error": "Transaction ID not found."})
             start_response(status, headers)
             return res
         except Exception as e:

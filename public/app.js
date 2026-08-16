@@ -495,7 +495,10 @@ async function fetchAdminTransactions() {
                             </div>
                         </td>
                         <td>
-                            <button onclick="openStatusModal('${t.id}', '${t.status}', '${t.progress_pct}', '${t.employee_id}')" class="btn-primary" style="padding: 4px 10px; font-size: 11px;">⚙️ Status</button>
+                            <div style="display: flex; gap: 4px;">
+                                <button onclick="openStatusModal('${t.id}', '${t.status}', '${t.progress_pct}', '${t.employee_id}')" class="btn-primary" style="padding: 4px 8px; font-size: 11px;">⚙️ Status</button>
+                                <button onclick="deleteTransactionRow('${t.id}', '${t.reference_number || t.receiver_name}')" class="logout-btn" style="padding: 4px 8px; font-size: 11px;">🗑️ Delete</button>
+                            </div>
                         </td>
                     </tr>
                 `;
@@ -504,6 +507,33 @@ async function fetchAdminTransactions() {
         }
     } catch (e) {
         tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #ef4444;">Failed to load records.</td></tr>`;
+    }
+}
+
+async function deleteTransactionRow(txId, name) {
+    if (!confirm(`Are you sure you want to delete record "${name || txId}"?`)) return;
+    try {
+        const res = await fetch("/api/delete-transaction", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transaction_id: txId })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            alert("✅ Record deleted successfully.");
+            const txRes = await fetch("/api/transactions?role=admin");
+            if (txRes.ok) {
+                const txData = await txRes.json();
+                allLedgerTransactions = txData.transactions || [];
+                renderBankLedgerTable();
+                fetchAdminTransactions();
+                fetchDashboardStats();
+            }
+        } else {
+            alert("Failed to delete record: " + (data.error || "Unknown error"));
+        }
+    } catch (e) {
+        alert("Delete error: " + e.message);
     }
 }
 
@@ -1000,7 +1030,7 @@ function renderBankLedgerTable() {
                 lastMonthHeader = monthHeaderStr;
                 rowsHtml += `
                     <tr class="month-divider-row">
-                        <td colspan="6">🗓️ --- ${monthHeaderStr.toUpperCase()} STATEMENT TENURE ---</td>
+                        <td colspan="7">🗓️ --- ${monthHeaderStr.toUpperCase()} STATEMENT TENURE ---</td>
                     </tr>
                 `;
             }
@@ -1016,13 +1046,16 @@ function renderBankLedgerTable() {
                     <td class="debit-val" style="text-align: right;">${debitVal > 0 ? debitVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                     <td class="credit-val" style="text-align: right;">${creditVal > 0 ? creditVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                     <td class="running-bal" style="text-align: right;">${currentBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td style="text-align: center;">
+                        <button onclick="deleteTransactionRow('${t.id}', '${particularsText.replace(/'/g, "\\'")}')" class="logout-btn" style="padding: 3px 6px; font-size: 11px;">🗑️ Delete</button>
+                    </td>
                 </tr>
             `;
         }
     });
 
     if (renderedCount === 0) {
-        rowsHtml = `<tr><td colspan="6" style="text-align: center; color: #94a3b8;">No statement transactions match the selected tenure or search filter.</td></tr>`;
+        rowsHtml = `<tr><td colspan="7" style="text-align: center; color: #94a3b8;">No statement transactions match the selected tenure or search filter.</td></tr>`;
     }
 
     tbody.innerHTML = rowsHtml;
@@ -1207,9 +1240,13 @@ function initMultiImageDropzones() {
 
 function handleImageFiles(files, role) {
     const batch = role === "admin" ? adminImageBatch : empImageBatch;
+    let containsPdf = false;
+
     Array.from(files).forEach(file => {
         const isImg = file.type.startsWith("image/");
         const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
+
+        if (isPdf) containsPdf = true;
 
         if (!isImg && !isPdf) {
             alert(`File "${file.name}" is not a supported image or PDF document.`);
@@ -1228,6 +1265,15 @@ function handleImageFiles(files, role) {
         };
         reader.readAsDataURL(file);
     });
+
+    if (role === "admin" && containsPdf) {
+        setTimeout(() => {
+            if (confirm("💡 Notice: Bank Statement PDFs have multi-row transactions. Would you like to switch to the 🏦 Continuous Bank Ledger tab to parse all statement rows cleanly?")) {
+                const tabLedger = document.getElementById("adminTabLedger");
+                if (tabLedger) tabLedger.click();
+            }
+        }, 300);
+    }
 }
 
 function renderImagePreviews(role) {

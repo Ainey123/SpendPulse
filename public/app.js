@@ -625,96 +625,65 @@ function handleBulkStatementFile(file) {
             if (progressBox) progressBox.classList.add("hidden");
         };
         reader.readAsText(file);
-    } else if (isPdf) {
+    } else if (isPdf || file.type.startsWith("image/")) {
         const reader = new FileReader();
         reader.onload = async (e) => {
             try {
-                const arrayBuffer = e.target.result;
-                let extractedText = "";
+                let items = [];
+                const b64 = e.target.result;
 
-                if (window.pdfjsLib) {
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
-                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-                    const pdf = await loadingTask.promise;
+                if (isPdf && window.pdfjsLib) {
+                    try {
+                        const arrayBuffer = await file.arrayBuffer();
+                        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+                        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                        const pdf = await loadingTask.promise;
+                        let extractedText = "";
 
-                    for (let p = 1; p <= pdf.numPages; p++) {
-                        const page = await pdf.getPage(p);
-                        const textContent = await page.getTextContent();
-                        const pageText = textContent.items.map(item => item.str).join(" ");
-                        extractedText += pageText + "\n";
+                        for (let p = 1; p <= pdf.numPages; p++) {
+                            const page = await pdf.getPage(p);
+                            const textContent = await page.getTextContent();
+                            const pageText = textContent.items.map(item => item.str).join(" ");
+                            extractedText += pageText + "\n";
+                        }
+
+                        if (extractedText.trim()) {
+                            items = parseCsvBankStatement(extractedText);
+                        }
+                    } catch (pdfErr) {
+                        console.warn("Client PDF.js text extraction notice:", pdfErr);
                     }
                 }
 
-                let items = [];
-                if (extractedText.trim()) {
-                    items = parseCsvBankStatement(extractedText);
+                // If client-side parsing extracted 0 items, send base64 to /api/parse-statement-file for AI multi-row extraction
+                if (items.length === 0) {
+                    if (progressBox) progressBox.textContent = `🤖 Analyzing & extracting all statement rows using AI...`;
+                    const res = await fetch("/api/parse-statement-file", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ file_base64: b64, file_type: isPdf ? "application/pdf" : "image/png" })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.transactions && data.transactions.length > 0) {
+                        items = data.transactions.map(t => ({
+                            date: t.date || new Date().toISOString().slice(0,10),
+                            particulars: t.particulars || t.purpose || "Bank Statement Entry",
+                            reference_number: t.reference_number || t.inst_no || `ref_${Math.random().toString(36).substr(2,7)}`,
+                            debit: strToFloat(t.debit || (t.transaction_type === "Credit" ? 0 : t.amount)),
+                            credit: strToFloat(t.credit || (t.transaction_type === "Credit" ? t.amount : 0)),
+                            amount: strToFloat(t.amount || t.debit || t.credit).toString(),
+                            transaction_type: t.transaction_type || (strToFloat(t.credit) > 0 ? "Credit" : "Payment")
+                        }));
+                    }
                 }
 
                 if (items.length > 0) {
                     openBulkPreviewModal(items);
                 } else {
-                    // Fallback to /api/scan for Vision/OCR parsing
-                    const b64Reader = new FileReader();
-                    b64Reader.onload = async (ev) => {
-                        const b64 = ev.target.result;
-                        const res = await fetch("/api/scan", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ image_base64: b64, logged_by: "PDF Statement Importer" })
-                        });
-                        const data = await res.json();
-                        if (res.ok) {
-                            const item = {
-                                date: data.date || new Date().toISOString().slice(0,10),
-                                particulars: data.purpose || data.receiver_name || "PDF Bank Statement Entry",
-                                reference_number: data.reference_number || data.id,
-                                debit: data.transaction_type === "Credit" ? 0 : strToFloat(data.amount),
-                                credit: data.transaction_type === "Credit" ? strToFloat(data.amount) : 0,
-                                amount: data.amount,
-                                transaction_type: data.transaction_type || "Payment"
-                            };
-                            openBulkPreviewModal([item]);
-                        } else {
-                            alert("Could not extract statement entries from PDF file.");
-                        }
-                        if (progressBox) progressBox.classList.add("hidden");
-                    };
-                    b64Reader.readAsDataURL(file);
-                    return;
+                    alert("Could not extract statement entries from file. Please ensure document has readable statement rows.");
                 }
             } catch (err) {
-                alert("Failed to parse PDF statement: " + err.message);
-            }
-            if (progressBox) progressBox.classList.add("hidden");
-        };
-        reader.readAsArrayBuffer(file);
-    } else if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                const b64 = e.target.result;
-                const res = await fetch("/api/scan", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ image_base64: b64, logged_by: "Statement OCR Importer" })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    const item = {
-                        date: data.date || new Date().toISOString().slice(0,10),
-                        particulars: data.purpose || data.receiver_name || "OCR Bank Statement Entry",
-                        reference_number: data.reference_number || data.id,
-                        debit: data.transaction_type === "Credit" ? 0 : strToFloat(data.amount),
-                        credit: data.transaction_type === "Credit" ? strToFloat(data.amount) : 0,
-                        amount: data.amount,
-                        transaction_type: data.transaction_type || "Payment"
-                    };
-                    openBulkPreviewModal([item]);
-                } else {
-                    alert("OCR Parsing failed: " + (data.error || "Unknown error"));
-                }
-            } catch (err) {
-                alert("Failed to parse statement image: " + err.message);
+                alert("Failed to parse statement document: " + err.message);
             }
             if (progressBox) progressBox.classList.add("hidden");
         };
@@ -725,64 +694,100 @@ function handleBulkStatementFile(file) {
     }
 }
 
-function parseCsvBankStatement(csvText) {
-    const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+function parseCsvBankStatement(text) {
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
     if (lines.length === 0) return [];
 
-    let headerIdx = -1;
-    let colMap = { date: -1, particulars: -1, ref: -1, debit: -1, credit: -1, amount: -1, type: -1 };
-
-    for (let i = 0; i < Math.min(lines.length, 10); i++) {
-        const cols = lines[i].split(",").map(c => c.replace(/^"|"$/g, '').trim().toLowerCase());
-        cols.forEach((c, idx) => {
-            if (c.includes("date")) colMap.date = idx;
-            else if (c.includes("particular") || c.includes("desc") || c.includes("payee") || c.includes("narrative")) colMap.particulars = idx;
-            else if (c.includes("inst") || c.includes("ref") || c.includes("trx") || c.includes("cheque") || c.includes("id")) colMap.ref = idx;
-            else if (c.includes("debit") || c.includes("out") || c.includes("withdrawal")) colMap.debit = idx;
-            else if (c.includes("credit") || c.includes("in") || c.includes("deposit")) colMap.credit = idx;
-            else if (c.includes("amount")) colMap.amount = idx;
-            else if (c.includes("type")) colMap.type = idx;
-        });
-
-        if (colMap.date !== -1 && (colMap.particulars !== -1 || colMap.debit !== -1 || colMap.credit !== -1 || colMap.amount !== -1)) {
-            headerIdx = i;
-            break;
-        }
-    }
-
-    const dataLines = headerIdx !== -1 ? lines.slice(headerIdx + 1) : lines;
     const results = [];
+    const dateRegex = /\b(\d{1,2}[-/\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{1,2})[-/\s]\d{2,4})\b/i;
 
-    dataLines.forEach(line => {
-        const rawCols = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || line.split(",");
-        const cols = rawCols.map(c => c.replace(/^"|"$/g, '').trim());
-
-        if (cols.length < 2) return;
-
-        let dStr = colMap.date !== -1 ? cols[colMap.date] : cols[0];
-        let partStr = colMap.particulars !== -1 ? cols[colMap.particulars] : (cols[1] || "Bank Entry");
-        let refStr = colMap.ref !== -1 ? cols[colMap.ref] : (cols[2] || "");
-        let debitVal = colMap.debit !== -1 ? strToFloat(cols[colMap.debit]) : 0;
-        let creditVal = colMap.credit !== -1 ? strToFloat(cols[colMap.credit]) : 0;
-        let amtVal = colMap.amount !== -1 ? strToFloat(cols[colMap.amount]) : 0;
-        let typeStr = colMap.type !== -1 ? cols[colMap.type] : "Payment";
-
-        if (!amtVal) {
-            amtVal = creditVal > 0 ? creditVal : debitVal;
+    lines.forEach(line => {
+        if (line.toLowerCase().includes("opening balance") || (line.toLowerCase().includes("particulars") && line.toLowerCase().includes("debit"))) {
+            return;
         }
-        if (creditVal > 0 && !typeStr) typeStr = "Credit";
 
-        if (dStr && (dStr.toLowerCase().includes("date") || dStr.toLowerCase().includes("opening"))) return;
+        let cols = [];
+        if (line.includes(",")) {
+            const rawCols = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || line.split(",");
+            cols = rawCols.map(c => c.replace(/^"|"$/g, '').trim());
+        }
 
-        results.push({
-            date: formatDateIso(dStr),
-            particulars: partStr || "Bank Statement Row",
-            reference_number: refStr,
-            debit: debitVal,
-            credit: creditVal,
-            amount: amtVal.toString(),
-            transaction_type: typeStr
-        });
+        if (cols.length < 2) {
+            cols = line.split(/\s{2,}|\t/).map(c => c.trim()).filter(c => c.length > 0);
+        }
+
+        const dateMatch = line.match(dateRegex);
+        if (dateMatch) {
+            const dateStr = dateMatch[1];
+            const numMatches = line.match(/\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b/g) || [];
+            let descStr = line.replace(dateStr, "").replace(/\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b/g, "").replace(/\s+/g, " ").trim();
+            if (!descStr) descStr = "Bank Statement Transaction";
+
+            let debit = 0;
+            let credit = 0;
+
+            if (numMatches.length >= 1) {
+                const numVals = numMatches.map(n => strToFloat(n));
+                if (numVals.length >= 3) {
+                    debit = numVals[0];
+                    credit = numVals[1];
+                } else if (numVals.length === 2) {
+                    if (line.toLowerCase().includes("credit") || line.toLowerCase().includes("deposit")) {
+                        credit = numVals[0];
+                    } else {
+                        debit = numVals[0];
+                    }
+                } else if (numVals.length === 1) {
+                    if (line.toLowerCase().includes("credit") || line.toLowerCase().includes("cr")) {
+                        credit = numVals[0];
+                    } else {
+                        debit = numVals[0];
+                    }
+                }
+            }
+
+            const amtVal = credit > 0 ? credit : debit;
+            if (amtVal > 0 || descStr.length > 3) {
+                results.push({
+                    date: formatDateIso(dateStr),
+                    particulars: descStr,
+                    reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
+                    debit: debit,
+                    credit: credit,
+                    amount: amtVal.toString(),
+                    transaction_type: credit > 0 ? "Credit" : "Payment"
+                });
+                return;
+            }
+        }
+
+        if (cols.length >= 2) {
+            let dStr = cols[0];
+            let partStr = cols[1] || "Bank Entry";
+            let debitVal = 0;
+            let creditVal = 0;
+            let refStr = cols.length > 2 ? cols[2] : "";
+
+            cols.forEach((c, idx) => {
+                const f = strToFloat(c);
+                if (f > 0 && idx > 1) {
+                    if (debitVal === 0) debitVal = f;
+                    else if (creditVal === 0) creditVal = f;
+                }
+            });
+
+            if (dStr && dateMatch) {
+                results.push({
+                    date: formatDateIso(dStr),
+                    particulars: partStr,
+                    reference_number: refStr || `ref_${Math.random().toString(36).substr(2,7)}`,
+                    debit: debitVal,
+                    credit: creditVal,
+                    amount: (creditVal > 0 ? creditVal : debitVal).toString(),
+                    transaction_type: creditVal > 0 ? "Credit" : "Payment"
+                });
+            }
+        }
     });
 
     return results;

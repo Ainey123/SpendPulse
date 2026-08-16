@@ -150,6 +150,47 @@ def call_gemini_rest(base64_data):
     except Exception:
         return None
 
+def call_gemini_statement_table(base64_data, mime_type="image/png"):
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return None
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    prompt = """This document is a bank statement table. Extract ALL transaction rows into a JSON array of objects. 
+Each object must have:
+- "date": "YYYY-MM-DD" format
+- "particulars": string description of payment/deposit
+- "reference_number": string instrument or reference number (or empty string if none)
+- "debit": numeric debit amount (0 if credit)
+- "credit": numeric credit amount (0 if debit)
+- "amount": numeric string of transaction amount
+- "transaction_type": "Payment" or "Credit"
+
+Return ONLY valid JSON in format: {"transactions": [...]}. Do not include markdown code blocks."""
+    
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime_type, "data": base64_data}}
+            ]
+        }]
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req) as response:
+            res_body = response.read().decode('utf-8')
+            res_json = json.loads(res_body)
+            text = res_json['candidates'][0]['content']['parts'][0]['text']
+            text = text.replace('```json', '').replace('```', '').strip()
+            data = json.loads(text)
+            if isinstance(data, list):
+                return {"transactions": data}
+            return data
+    except Exception as e:
+        print("Gemini Statement extraction error:", e)
+        return None
+
 def app(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET")
@@ -693,6 +734,41 @@ def app(environ, start_response):
                 "added_count": added_count,
                 "skipped_count": skipped_count
             })
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
+    # 9. AI Multi-Row Statement File Parser Endpoint
+    if path == "/api/parse-statement-file" and method == "POST":
+        try:
+            length = int(environ.get("CONTENT_LENGTH", "0"))
+            body = environ["wsgi.input"].read(length)
+            data = json.loads(body.decode("utf-8"))
+
+            b64_data = data.get("file_base64") or data.get("image_base64") or ""
+            file_type = data.get("file_type") or "image/png"
+
+            if not b64_data:
+                status, headers, res = _json(400, {"error": "Missing file_base64 payload."})
+                start_response(status, headers)
+                return res
+
+            if "," in b64_data:
+                b64_clean = b64_data.split(",")[1]
+            else:
+                b64_clean = b64_data
+
+            mime_type = "application/pdf" if "pdf" in file_type.lower() else "image/png"
+            extracted_res = call_gemini_statement_table(b64_clean, mime_type)
+
+            tx_items = []
+            if extracted_res and "transactions" in extracted_res:
+                tx_items = extracted_res["transactions"]
+
+            status, headers, res = _json(200, {"transactions": tx_items})
             start_response(status, headers)
             return res
         except Exception as e:

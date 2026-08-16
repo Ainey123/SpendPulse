@@ -750,101 +750,189 @@ function handleBulkStatementFile(file) {
     }
 }
 
-function parseCsvBankStatement(text) {
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-    if (lines.length === 0) return [];
+
+// ---------------------------------------------------------------
+// UNIVERSAL BANK STATEMENT PARSER
+// Works with Bank Alfalah, HBL, Meezan, UBL, MCB, Allied, etc.
+// Handles multiline date-blocks correctly (Bank Alfalah style)
+// ---------------------------------------------------------------
+function parseCsvBankStatement(rawText) {
+    // Step 1: Split into lines and clean
+    const rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    // Step 2: Remove header/footer junk lines
+    const SKIP_PATTERNS = [
+        /^page\s+\d+\s+of\s+\d+/i,
+        /^statement\s+of\s+account/i,
+        /^date\s+description\s+cheq/i,
+        /^date\s+particulars/i,
+        /^account\s+(no|number|title)/i,
+        /^branch\s+(code|name)/i,
+        /^raiwind\s+road/i,
+        /^lahore/i,
+        /^currency\s*:/i,
+        /^period\s*:/i,
+        /^from\s+date\s*:/i,
+        /^to\s+date\s*:/i,
+        /^customer\s+(name|id)/i,
+        /^bank\s+alfalah/i,
+        /^meezan\s+bank/i,
+        /^habib\s+bank/i,
+        /^ubl\s+/i,
+        /^mcb\s+/i,
+        /^opening\s+balance/i,
+        /^closing\s+balance/i,
+        /^debit\s+credit\s+balance/i,
+        /^\*+/,
+        /^-{3,}/,
+        /^\s*$/
+    ];
+
+    const cleanLines = rawLines.filter(line => {
+        return !SKIP_PATTERNS.some(pat => pat.test(line));
+    });
 
     const results = [];
-    const dateRegex = /\b(\d{1,2}[-/\s](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{1,2})[-/\s]\d{2,4})\b/i;
 
-    lines.forEach(line => {
-        if (line.toLowerCase().includes("opening balance") || (line.toLowerCase().includes("particulars") && line.toLowerCase().includes("debit"))) {
-            return;
+    // Step 3: Try Bank Alfalah multiline date-block parsing
+    // Each transaction block starts with a date like "02-01-2026" or "14/11/2025"
+    const DATE_BLOCK_REGEX = /^\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}$/;
+    const DATE_INLINE_REGEX = /^(\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4})\s+(.+)$/;
+
+    // Try to group lines into date blocks (Bank Alfalah PDF style)
+    const blocks = [];
+    let currentBlock = null;
+
+    for (const line of cleanLines) {
+        const isDateLine = DATE_BLOCK_REGEX.test(line);
+        const inlineMatch = line.match(DATE_INLINE_REGEX);
+
+        if (isDateLine) {
+            if (currentBlock) blocks.push(currentBlock);
+            currentBlock = { date: line, lines: [] };
+        } else if (inlineMatch && !currentBlock) {
+            // Inline format: date and description on same line
+            blocks.push({ date: inlineMatch[1], lines: [inlineMatch[2]] });
+        } else if (currentBlock) {
+            currentBlock.lines.push(line);
         }
+    }
+    if (currentBlock) blocks.push(currentBlock);
 
-        let cols = [];
-        if (line.includes(",")) {
-            const rawCols = line.match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || line.split(",");
-            cols = rawCols.map(c => c.replace(/^"|"$/g, '').trim());
-        }
+    // Step 4: Parse each block into a transaction object
+    // Amount pattern: numbers >= 100 with optional comma and decimal (e.g. 17000, 1,500.00, 250000.00)
+    // We explicitly exclude small numbers like page numbers (< 100)
+    const AMT_REGEX = /\b(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b/g;
 
-        if (cols.length < 2) {
-            cols = line.split(/\s{2,}|\t/).map(c => c.trim()).filter(c => c.length > 0);
-        }
+    for (const block of blocks) {
+        const fullText = block.lines.join(' ');
+        const dateStr = block.date;
 
-        const dateMatch = line.match(dateRegex);
-        if (dateMatch) {
-            const dateStr = dateMatch[1];
-            const numMatches = line.match(/\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b/g) || [];
-            let descStr = line.replace(dateStr, "").replace(/\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b/g, "").replace(/\s+/g, " ").trim();
-            if (!descStr) descStr = "Bank Statement Transaction";
+        // Skip if block has no useful content
+        if (fullText.length < 3) continue;
 
-            let debit = 0;
-            let credit = 0;
-
-            if (numMatches.length >= 1) {
-                const numVals = numMatches.map(n => strToFloat(n));
-                if (numVals.length >= 3) {
-                    debit = numVals[0];
-                    credit = numVals[1];
-                } else if (numVals.length === 2) {
-                    if (line.toLowerCase().includes("credit") || line.toLowerCase().includes("deposit")) {
-                        credit = numVals[0];
-                    } else {
-                        debit = numVals[0];
-                    }
-                } else if (numVals.length === 1) {
-                    if (line.toLowerCase().includes("credit") || line.toLowerCase().includes("cr")) {
-                        credit = numVals[0];
-                    } else {
-                        debit = numVals[0];
-                    }
-                }
-            }
-
-            const amtVal = credit > 0 ? credit : debit;
-            if (amtVal > 0 || descStr.length > 3) {
-                results.push({
-                    date: formatDateIso(dateStr),
-                    particulars: descStr,
-                    reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
-                    debit: debit,
-                    credit: credit,
-                    amount: amtVal.toString(),
-                    transaction_type: credit > 0 ? "Credit" : "Payment"
-                });
-                return;
+        // Extract all candidate amounts >= 100 (to exclude page numbers like 33, 180)
+        const allNums = [];
+        let m;
+        AMT_REGEX.lastIndex = 0;
+        while ((m = AMT_REGEX.exec(fullText)) !== null) {
+            const val = parseFloat(m[1].replace(/,/g, ''));
+            if (val >= 100) { // Only accept amounts >= 100 PKR
+                allNums.push(val);
             }
         }
 
-        if (cols.length >= 2) {
-            let dStr = cols[0];
-            let partStr = cols[1] || "Bank Entry";
-            let debitVal = 0;
-            let creditVal = 0;
-            let refStr = cols.length > 2 ? cols[2] : "";
+        // Extract receiver name from IBFT To patterns (Bank Alfalah specific)
+        let receiverName = '';
+        let accountNumber = '';
 
-            cols.forEach((c, idx) => {
-                const f = strToFloat(c);
-                if (f > 0 && idx > 1) {
-                    if (debitVal === 0) debitVal = f;
-                    else if (creditVal === 0) creditVal = f;
-                }
+        const ibftToMatch = fullText.match(/\bTo\s+([A-Z][A-Z\s]{2,40}?)\s*[-–]\s*(?:[A-Z][A-Za-z\s]+Bank|Easypaisa|JazzCash|Telenor|Meezan|Allied|MCB|HBL|UBL|Faysal|Silk)/i);
+        if (ibftToMatch) {
+            receiverName = ibftToMatch[1].trim();
+        }
+
+        const phoneMatch = fullText.match(/\b(0[23]\d{9})\b/);
+        const ibanMatch = fullText.match(/\b(PK\d{2}[A-Z]{4}\d{16})\b/);
+        const longNumMatch = fullText.match(/\b(\d{10,16})\b/);
+        if (phoneMatch) accountNumber = phoneMatch[1];
+        else if (ibanMatch) accountNumber = ibanMatch[1];
+        else if (longNumMatch) accountNumber = longNumMatch[1];
+
+        // Determine debit/credit
+        let debit = 0;
+        let credit = 0;
+        const isCredit = /\bcredit\b|\bdeposit\b|\breceived\b|\bcr\b/i.test(fullText);
+        const isDebit = /\bibft\b|\bpayment\b|\btransfer\b|\bdebit\b|\bdr\b|\bwithdrawal\b/i.test(fullText);
+
+        if (allNums.length === 1) {
+            if (isCredit && !isDebit) credit = allNums[0];
+            else debit = allNums[0];
+        } else if (allNums.length === 2) {
+            // First is debit/credit, second is running balance
+            debit = isCredit ? 0 : allNums[0];
+            credit = isCredit ? allNums[0] : 0;
+        } else if (allNums.length >= 3) {
+            // Pattern: Debit Credit Balance — take first two meaningful values
+            // Skip the running balance (last large number)
+            debit = allNums[0];
+            credit = allNums[1];
+            // Check: if second number seems like balance (very large), adjust
+            if (allNums[1] > allNums[0] * 5 && allNums[0] > 0) {
+                credit = 0; // second is likely running balance not credit
+            }
+        }
+
+        const amt = credit > 0 ? credit : debit;
+        if (amt < 100 && !receiverName) continue; // Skip rows with no usable data
+
+        const particularsClean = fullText
+            .replace(/\b0[23]\d{9}\b/g, '')
+            .replace(/\bPK\d{2}[A-Z]{4}\d{16}\b/g, '')
+            .replace(/\b\d{10,16}\b/g, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim()
+            .substring(0, 200);
+
+        results.push({
+            date: formatDateIso(dateStr),
+            particulars: particularsClean || 'Bank Statement Transaction',
+            receiver_name: receiverName,
+            account_number: accountNumber,
+            reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
+            debit: debit,
+            credit: credit,
+            amount: amt.toString(),
+            transaction_type: credit > 0 ? 'Credit' : 'Payment'
+        });
+    }
+
+    // Step 5: Fallback to simple CSV parsing if no date-blocks were found
+    if (results.length === 0) {
+        for (const line of cleanLines) {
+            const parts = line.split(/,|\t/).map(p => p.trim());
+            if (parts.length < 3) continue;
+            const dateStr = parts[0];
+            const dateTest = dateStr.match(/\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}/);
+            if (!dateTest) continue;
+            const desc = parts[1] || 'Bank Entry';
+            const nums = parts.slice(2).map(p => parseFloat(p.replace(/,/g,''))).filter(n => !isNaN(n) && n >= 100);
+            if (nums.length === 0) continue;
+            const debitVal = nums[0] || 0;
+            const creditVal = nums[1] || 0;
+            const amt = creditVal > 0 ? creditVal : debitVal;
+            results.push({
+                date: formatDateIso(dateStr),
+                particulars: desc,
+                receiver_name: '',
+                account_number: '',
+                reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
+                debit: debitVal,
+                credit: creditVal,
+                amount: amt.toString(),
+                transaction_type: creditVal > 0 ? 'Credit' : 'Payment'
             });
-
-            if (dStr && dateMatch) {
-                results.push({
-                    date: formatDateIso(dStr),
-                    particulars: partStr,
-                    reference_number: refStr || `ref_${Math.random().toString(36).substr(2,7)}`,
-                    debit: debitVal,
-                    credit: creditVal,
-                    amount: (creditVal > 0 ? creditVal : debitVal).toString(),
-                    transaction_type: creditVal > 0 ? "Credit" : "Payment"
-                });
-            }
         }
-    });
+    }
 
     return results;
 }

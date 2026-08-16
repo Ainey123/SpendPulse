@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#0f172a" />
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 </head>
 <body>
 
@@ -159,13 +160,13 @@
 
         <!-- Admin Multi-Image Upload & Task Creation Form -->
         <div class="upload-card">
-          <h3 style="margin: 0 0 8px 0; font-size: 18px; color: white;">🖼️ Upload Images & Create Task</h3>
-          <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">Upload receipt images or task bills (JPG, JPEG, PNG, WEBP). Select multiple images with preview controls.</p>
+          <h3 style="margin: 0 0 8px 0; font-size: 18px; color: white;">🖼️ Upload Images / PDF & Create Task</h3>
+          <p style="font-size: 13px; color: #94a3b8; margin-bottom: 20px;">Upload receipt images, PDF files, or task bills (PDF, JPG, JPEG, PNG, WEBP). Select multiple files with preview controls.</p>
 
           <div id="adminDropzone" class="dropzone">
-            <p style="margin: 0; font-weight: 600; color: #818cf8;">📸 Drag & Drop image files here or click to select</p>
-            <span style="font-size: 12px; color: #94a3b8;">Supports multiple JPG, PNG, WEBP images</span>
-            <input type="file" id="adminFileInput" accept="image/*" multiple hidden />
+            <p style="margin: 0; font-weight: 600; color: #818cf8;">📸 Drag & Drop PDF / image files here or click to select</p>
+            <span style="font-size: 12px; color: #94a3b8;">Supports PDF documents and multiple JPG, PNG, WEBP images</span>
+            <input type="file" id="adminFileInput" accept=".pdf,image/*,application/pdf" multiple hidden />
           </div>
 
           <!-- Live Thumbnails Grid -->
@@ -190,7 +191,7 @@
             </div>
           </div>
 
-          <button id="adminUploadBtn" class="btn-primary hidden" style="width: 100%; margin-top: 14px;">Upload Images & Process Data</button>
+          <button id="adminUploadBtn" class="btn-primary hidden" style="width: 100%; margin-top: 14px;">Upload Files & Process Data</button>
           <div id="adminUploadStatus" class="hidden" style="margin-top: 14px;"></div>
         </div>
 
@@ -230,14 +231,14 @@
         <div class="upload-card" style="margin-bottom: 20px; padding: 20px; border: 1.5px dashed rgba(99, 102, 241, 0.5);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0; font-size: 17px; color: white;">📤 Bulk Upload Whole Bank Statement File</h3>
-            <span style="font-size: 11px; background: rgba(99,102,241,0.2); color: #818cf8; padding: 4px 10px; border-radius: 12px; font-weight: 600;">CSV / Excel / Statement Image</span>
+            <span style="font-size: 11px; background: rgba(99,102,241,0.2); color: #818cf8; padding: 4px 10px; border-radius: 12px; font-weight: 600;">PDF / CSV / Excel / Statement Image</span>
           </div>
-          <p style="font-size: 12px; color: #94a3b8; margin-bottom: 14px;">Upload full bank statements (CSV, Excel `.xlsx`/`.csv`, or image). All transactions auto-append to the continuous statement ledger on this exact page seamlessly!</p>
+          <p style="font-size: 12px; color: #94a3b8; margin-bottom: 14px;">Upload full bank statement files (PDF, CSV, Excel `.xlsx`/`.csv`, or images). All transactions auto-append to the continuous statement ledger on this exact page seamlessly!</p>
 
           <div id="bulkStatementDropzone" class="dropzone" style="padding: 24px;">
-            <p style="margin: 0; font-weight: 600; color: #6366f1;">📁 Drag & Drop Bank Statement File (CSV/Excel/Images) or click to browse</p>
-            <span style="font-size: 11px; color: #94a3b8;">Supports full multi-row bank statements with automatic duplicate prevention</span>
-            <input type="file" id="bulkFileInput" accept=".csv,.xlsx,.xls,image/*" hidden />
+            <p style="margin: 0; font-weight: 600; color: #6366f1;">📁 Drag & Drop Bank Statement File (PDF / CSV / Excel / Images) or click to browse</p>
+            <span style="font-size: 11px; color: #94a3b8;">Supports full multi-row PDF & CSV bank statements with automatic duplicate prevention</span>
+            <input type="file" id="bulkFileInput" accept=".pdf,.csv,.xlsx,.xls,image/*,application/pdf" hidden />
           </div>
 
           <div id="bulkUploadProgress" class="hidden" style="margin-top: 10px;"></div>

@@ -610,6 +610,7 @@ function handleBulkStatementFile(file) {
     }
 
     const name = file.name.toLowerCase();
+    const isPdf = name.endsWith(".pdf") || file.type === "application/pdf";
 
     if (name.endsWith(".csv") || name.endsWith(".txt")) {
         const reader = new FileReader();
@@ -624,6 +625,69 @@ function handleBulkStatementFile(file) {
             if (progressBox) progressBox.classList.add("hidden");
         };
         reader.readAsText(file);
+    } else if (isPdf) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const arrayBuffer = e.target.result;
+                let extractedText = "";
+
+                if (window.pdfjsLib) {
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+                    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                    const pdf = await loadingTask.promise;
+
+                    for (let p = 1; p <= pdf.numPages; p++) {
+                        const page = await pdf.getPage(p);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(" ");
+                        extractedText += pageText + "\n";
+                    }
+                }
+
+                let items = [];
+                if (extractedText.trim()) {
+                    items = parseCsvBankStatement(extractedText);
+                }
+
+                if (items.length > 0) {
+                    openBulkPreviewModal(items);
+                } else {
+                    // Fallback to /api/scan for Vision/OCR parsing
+                    const b64Reader = new FileReader();
+                    b64Reader.onload = async (ev) => {
+                        const b64 = ev.target.result;
+                        const res = await fetch("/api/scan", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ image_base64: b64, logged_by: "PDF Statement Importer" })
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                            const item = {
+                                date: data.date || new Date().toISOString().slice(0,10),
+                                particulars: data.purpose || data.receiver_name || "PDF Bank Statement Entry",
+                                reference_number: data.reference_number || data.id,
+                                debit: data.transaction_type === "Credit" ? 0 : strToFloat(data.amount),
+                                credit: data.transaction_type === "Credit" ? strToFloat(data.amount) : 0,
+                                amount: data.amount,
+                                transaction_type: data.transaction_type || "Payment"
+                            };
+                            openBulkPreviewModal([item]);
+                        } else {
+                            alert("Could not extract statement entries from PDF file.");
+                        }
+                        if (progressBox) progressBox.classList.add("hidden");
+                    };
+                    b64Reader.readAsDataURL(file);
+                    return;
+                }
+            } catch (err) {
+                alert("Failed to parse PDF statement: " + err.message);
+            }
+            if (progressBox) progressBox.classList.add("hidden");
+        };
+        reader.readAsArrayBuffer(file);
     } else if (file.type.startsWith("image/")) {
         const reader = new FileReader();
         reader.onload = async (e) => {
@@ -656,7 +720,7 @@ function handleBulkStatementFile(file) {
         };
         reader.readAsDataURL(file);
     } else {
-        alert("Supported statement formats: CSV (.csv), Plain Text (.txt), or Statement Image (JPG, PNG).");
+        alert("Supported statement formats: PDF (.pdf), CSV (.csv), Plain Text (.txt), or Statement Image (JPG, PNG).");
         if (progressBox) progressBox.classList.add("hidden");
     }
 }
@@ -1120,13 +1184,22 @@ function initMultiImageDropzones() {
 function handleImageFiles(files, role) {
     const batch = role === "admin" ? adminImageBatch : empImageBatch;
     Array.from(files).forEach(file => {
-        if (!file.type.startsWith("image/")) {
-            alert(`File "${file.name}" is not an image (JPG, PNG, WEBP allowed).`);
+        const isImg = file.type.startsWith("image/");
+        const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type === "application/pdf";
+
+        if (!isImg && !isPdf) {
+            alert(`File "${file.name}" is not a supported image or PDF document.`);
             return;
         }
+
         const reader = new FileReader();
         reader.onload = (e) => {
-            batch.push({ id: Math.random().toString(36).substr(2, 9), name: file.name, base64: e.target.result });
+            batch.push({ 
+                id: Math.random().toString(36).substr(2, 9), 
+                name: file.name, 
+                base64: e.target.result,
+                isPdf: isPdf 
+            });
             renderImagePreviews(role);
         };
         reader.readAsDataURL(file);
@@ -1150,10 +1223,20 @@ function renderImagePreviews(role) {
     batch.forEach((imgObj, idx) => {
         const div = document.createElement("div");
         div.className = "thumb-card";
-        div.innerHTML = `
-            <img src="${imgObj.base64}" alt="${imgObj.name}" />
-            <button class="thumb-remove-btn" onclick="removeThumbImage('${role}', ${idx})">✕</button>
-        `;
+        if (imgObj.isPdf) {
+            div.innerHTML = `
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 8px; text-align: center; background: #1e1b4b; color: #a5b4fc;">
+                    <div style="font-size: 24px;">📄</div>
+                    <div style="font-size: 10px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; margin-top: 4px;">${imgObj.name}</div>
+                </div>
+                <button class="thumb-remove-btn" onclick="removeThumbImage('${role}', ${idx})">✕</button>
+            `;
+        } else {
+            div.innerHTML = `
+                <img src="${imgObj.base64}" alt="${imgObj.name}" />
+                <button class="thumb-remove-btn" onclick="removeThumbImage('${role}', ${idx})">✕</button>
+            `;
+        }
         grid.appendChild(div);
     });
 }

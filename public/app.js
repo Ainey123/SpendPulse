@@ -919,9 +919,6 @@ function parseCsvBankStatement(rawText) {
         });
     }
 
-    return results;
-}
-
     // Step 5: Fallback to simple CSV parsing if no date-blocks were found
     if (results.length === 0) {
         for (const line of cleanLines) {

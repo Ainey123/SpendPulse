@@ -438,16 +438,22 @@ function initAdminFormEvents() {
     const refBtn = document.getElementById("refreshAdminTableBtn");
     if (refBtn) refBtn.onclick = () => fetchAdminTransactions();
 
+    // 🧹 Smart Cleanup — remove junk/bad rows only
     const cleanupBtn = document.getElementById("cleanupDumpsBtn");
     if (cleanupBtn) {
         cleanupBtn.onclick = async () => {
-            if (!confirm("Are you sure you want to clean up all raw statement dump rows from Google Sheets?")) return;
+            if (!confirm("Remove junk rows (wrong amounts like 33, 180, 2026, raw statement text dumps)? Real payment records will be kept.")) return;
             cleanupBtn.disabled = true;
             cleanupBtn.textContent = "⏳ Cleaning...";
             try {
-                const res = await fetch("/api/cleanup-statement-dumps", { method: "POST" });
+                const res = await fetch("/api/cleanup-statement-dumps", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ wipe_all: false })
+                });
                 const data = await res.json();
                 alert(`✅ ${data.message}`);
+                allLedgerTransactions = [];
                 fetchAdminTransactions();
                 loadBankLedgerStatement();
                 fetchDashboardStats();
@@ -455,7 +461,36 @@ function initAdminFormEvents() {
                 alert("Cleanup error: " + err.message);
             } finally {
                 cleanupBtn.disabled = false;
-                cleanupBtn.textContent = "🧹 Cleanup Dumped Statement Rows";
+                cleanupBtn.textContent = "🧹 Remove Junk Rows";
+            }
+        };
+    }
+
+    // 🗑️ Wipe ALL — delete every transaction row
+    const wipeBtn = document.getElementById("wipeAllDataBtn");
+    if (wipeBtn) {
+        wipeBtn.onclick = async () => {
+            if (!confirm("⚠️ WARNING: This will permanently delete ALL transaction records from Google Sheets. This cannot be undone. Are you absolutely sure?")) return;
+            if (!confirm("Last chance — click OK to permanently wipe ALL data.")) return;
+            wipeBtn.disabled = true;
+            wipeBtn.textContent = "⏳ Wiping...";
+            try {
+                const res = await fetch("/api/cleanup-statement-dumps", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ wipe_all: true })
+                });
+                const data = await res.json();
+                alert(`✅ ${data.message}`);
+                allLedgerTransactions = [];
+                fetchAdminTransactions();
+                loadBankLedgerStatement();
+                fetchDashboardStats();
+            } catch (err) {
+                alert("Wipe error: " + err.message);
+            } finally {
+                wipeBtn.disabled = false;
+                wipeBtn.textContent = "🗑️ Wipe ALL Data";
             }
         };
     }

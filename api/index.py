@@ -416,9 +416,9 @@ def app(environ, start_response):
             deleted = False
             if len(rows) > 1:
                 for idx, r in enumerate(rows[1:], start=2):
-                    r_id = r[16] if len(r) > 16 and r[16] else ""
-                    r_ref = r[0] if len(r) > 0 and r[0] else ""
-                    if target_id in [r_id, r_ref]:
+                    # Search across ALL columns: col 0 (ref), col 16 (id), any column
+                    row_vals = [str(v).strip() for v in r]
+                    if target_id in row_vals:
                         ws_tx.delete_rows(idx)
                         deleted = True
                         break
@@ -426,7 +426,7 @@ def app(environ, start_response):
             if deleted:
                 status, headers, res = _json(200, {"message": "Transaction deleted successfully."})
             else:
-                status, headers, res = _json(400, {"error": "Transaction ID not found."})
+                status, headers, res = _json(400, {"error": f"Transaction ID '{target_id}' not found in any row."})
             start_response(status, headers)
             return res
         except Exception as e:
@@ -434,24 +434,61 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
-    # Cleanup Unwanted Statement Dump Rows (Admin Only)
+    # Cleanup All Data — Wipe all transaction rows (Admin Only)
     if path == "/api/cleanup-statement-dumps" and method == "POST":
         try:
+            length = int(environ.get("CONTENT_LENGTH", "0") or "0")
+            body = environ["wsgi.input"].read(length) if length > 0 else b"{}"
+            req_data = json.loads(body.decode("utf-8")) if body else {}
+            wipe_all = req_data.get("wipe_all", False)
+
             ws_tx, ws_users, sid = get_google_sheet_tabs()
             rows = ws_tx.get_all_values()
 
             deleted_count = 0
-            if len(rows) > 1:
+            if wipe_all:
+                # Nuke ALL rows except the header row
+                if len(rows) > 1:
+                    total_data_rows = len(rows) - 1
+                    # Delete from bottom up to preserve row indices
+                    for idx in range(len(rows), 1, -1):
+                        ws_tx.delete_rows(idx)
+                        deleted_count += 1
+            else:
+                # Smart cleanup: delete rows with junk data
+                JUNK_PATTERNS = [
+                    "statement of account",
+                    "page of date description",
+                    "raiwind road branch",
+                    "cheq/inst",
+                    "date description",
+                    "opening balance",
+                    "closing balance",
+                    "ibft from fast engineering",  # header-style dumps
+                ]
+                JUNK_AMOUNTS = ["33", "180", "2026", "2025", "2024", "1", "0"]
+
                 for idx in range(len(rows), 1, -1):
                     r = rows[idx - 1]
                     if not r or len(r) == 0:
+                        ws_tx.delete_rows(idx)
+                        deleted_count += 1
                         continue
                     full_str = " ".join([str(x) for x in r]).lower()
-                    if "statement of account" in full_str or "page of date description" in full_str or "raiwind road branch" in full_str:
+                    amt_col = str(r[3]).strip() if len(r) > 3 else ""
+                    is_junk = (
+                        any(p in full_str for p in JUNK_PATTERNS)
+                        or amt_col in JUNK_AMOUNTS
+                        or (amt_col and not any(c.isdigit() for c in amt_col))
+                    )
+                    if is_junk:
                         ws_tx.delete_rows(idx)
                         deleted_count += 1
 
-            status, headers, res = _json(200, {"message": f"Cleaned up {deleted_count} unwanted statement dump rows.", "deleted_count": deleted_count})
+            status, headers, res = _json(200, {
+                "message": f"Cleaned up {deleted_count} rows {'(ALL data wiped)' if wipe_all else '(junk rows removed)'}.",
+                "deleted_count": deleted_count
+            })
             start_response(status, headers)
             return res
         except Exception as e:

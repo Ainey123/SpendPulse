@@ -869,28 +869,33 @@ function parseCsvBankStatement(rawText) {
         else if (ibanMatch) accountNumber = ibanMatch[1];
         else if (longNumMatch) accountNumber = longNumMatch[1];
 
-        // Parse numbers from last line (Bank Alfalah has Debit/Credit + Running Balance on last line)
-        const lastLine = block.lines[block.lines.length - 1] || fullText;
-        const numMatches = (lastLine.match(/\b\d+(?:\.\d{1,2})?\b/g) || [])
+        // Parse numbers from fullText (Bank Alfalah has Debit/Credit + Running Balance)
+        const numMatches = (fullText.match(/\b\d+(?:\.\d{1,2})?\b/g) || [])
             .map(n => parseFloat(n))
-            .filter(n => n >= 100 && n !== 2026 && n !== 2025 && n !== 2024 && n !== 180 && n !== 33);
+            .filter(n => {
+                if (isNaN(n) || n < 100) return false;
+                if (n === 2026 || n === 2025 || n === 2024 || n === 180 || n === 33) return false;
+                if (n > 1000000000) return false; // Ignore long account/phone numbers
+                return true;
+            });
 
         let debit = 0.0;
         let credit = 0.0;
+        let txAmt = 0.0;
+
+        if (numMatches.length >= 2) {
+            // First number is Tx Amount, second is Running Balance
+            txAmt = numMatches[0];
+        } else if (numMatches.length === 1) {
+            txAmt = numMatches[0];
+        }
 
         if (isCredit) {
-            if (numMatches.length >= 2) {
-                credit = numMatches[numMatches.length - 2];
-            } else if (numMatches.length === 1) {
-                credit = numMatches[0];
-            }
+            credit = txAmt;
+            debit = 0.0;
         } else {
-            // Debit IBFT Transaction
-            if (numMatches.length >= 2) {
-                debit = numMatches[numMatches.length - 2];
-            } else if (numMatches.length === 1) {
-                debit = numMatches[0];
-            }
+            debit = txAmt;
+            credit = 0.0;
         }
 
         const amtVal = credit > 0 ? credit : debit;

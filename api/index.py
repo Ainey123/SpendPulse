@@ -380,7 +380,7 @@ def app(environ, start_response):
             if len(rows) > 1:
                 for idx, r in enumerate(rows[1:], start=2):
                     if r[0] == target_id or r[1].lower() == target_id.lower():
-                        ws_users.delete_rows(idx)
+                        ws_users.delete_row(idx)
                         deleted = True
                         break
 
@@ -416,7 +416,7 @@ def app(environ, start_response):
                 for idx, r in enumerate(rows[1:], start=2):
                     row_vals = [str(v).strip() for v in r]
                     if target_id in row_vals:
-                        ws_tx.delete_rows(idx)
+                        ws_tx.delete_row(idx)
                         deleted = True
                         break
 
@@ -447,7 +447,7 @@ def app(environ, start_response):
                 # Nuke ALL transaction rows except the header row
                 if len(rows) > 1:
                     for idx in range(len(rows), 1, -1):
-                        ws_tx.delete_rows(idx)
+                        ws_tx.delete_row(idx)
                         deleted_count += 1
             else:
                 # Delete junk/dump rows or rows with 0 amount
@@ -461,7 +461,7 @@ def app(environ, start_response):
                 for idx in range(len(rows), 1, -1):
                     r = rows[idx - 1]
                     if not r or len(r) == 0:
-                        ws_tx.delete_rows(idx)
+                        ws_tx.delete_row(idx)
                         deleted_count += 1
                         continue
                     full_str = " ".join([str(x) for x in r]).lower()
@@ -478,7 +478,7 @@ def app(environ, start_response):
                         or amt_val == 0.0
                     )
                     if is_junk:
-                        ws_tx.delete_rows(idx)
+                        ws_tx.delete_row(idx)
                         deleted_count += 1
 
             status, headers, res = _json(200, {

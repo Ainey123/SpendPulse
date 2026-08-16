@@ -15,6 +15,7 @@ let selectedTxId = null;
 // Ledger Statement Cache
 let allLedgerTransactions = [];
 const DEFAULT_OPENING_BALANCE = 1000000.00;
+let parsedBulkItems = [];
 
 // Initialize App
 document.addEventListener("DOMContentLoaded", () => {
@@ -23,6 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initMultiImageDropzones();
     initAdminSubTabs();
     initLedgerFilters();
+    initBulkStatementUploader();
     checkExistingSession();
 });
 
@@ -517,7 +519,7 @@ function getStatusPill(st) {
 }
 
 // -------------------------------------------------------------
-// 5. CONTINUOUS BANK LEDGER STATEMENT CONTROLLER (MATCHES USER EXCEL REFERENCE)
+// 5. CONTINUOUS BANK LEDGER STATEMENT & BULK UPLOADER CONTROLLER
 // -------------------------------------------------------------
 async function loadBankLedgerStatement() {
     if (allLedgerTransactions.length === 0) {
@@ -564,6 +566,270 @@ function initLedgerFilters() {
     }
 }
 
+function initBulkStatementUploader() {
+    const dropzone = document.getElementById("bulkStatementDropzone");
+    const fileInput = document.getElementById("bulkFileInput");
+
+    if (!dropzone || !fileInput) return;
+
+    dropzone.onclick = () => fileInput.click();
+
+    fileInput.onchange = (e) => {
+        if (e.target.files.length) handleBulkStatementFile(e.target.files[0]);
+    };
+
+    dropzone.ondragover = (e) => { e.preventDefault(); dropzone.style.borderColor = "#6366f1"; };
+    dropzone.ondragleave = () => dropzone.style.borderColor = "rgba(99, 102, 241, 0.5)";
+    dropzone.ondrop = (e) => {
+        e.preventDefault();
+        dropzone.style.borderColor = "rgba(99, 102, 241, 0.5)";
+        if (e.dataTransfer.files.length) handleBulkStatementFile(e.dataTransfer.files[0]);
+    };
+
+    const confirmBtn = document.getElementById("confirmBulkImportBtn");
+    const cancelBtn = document.getElementById("cancelBulkImportBtn");
+    const selectAll = document.getElementById("bulkSelectAll");
+
+    if (confirmBtn) confirmBtn.onclick = confirmBulkImport;
+    if (cancelBtn) cancelBtn.onclick = () => document.getElementById("bulkPreviewModal").classList.add("hidden");
+    if (selectAll) {
+        selectAll.onchange = (e) => {
+            const cbs = document.querySelectorAll(".bulk-row-cb");
+            cbs.forEach(cb => cb.checked = e.target.checked);
+            updateBulkSelectedCount();
+        };
+    }
+}
+
+function handleBulkStatementFile(file) {
+    const progressBox = document.getElementById("bulkUploadProgress");
+    if (progressBox) {
+        progressBox.textContent = `⏳ Reading & parsing "${file.name}"...`;
+        progressBox.className = "success";
+        progressBox.classList.remove("hidden");
+    }
+
+    const name = file.name.toLowerCase();
+
+    if (name.endsWith(".csv") || name.endsWith(".txt")) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const items = parseCsvBankStatement(e.target.result);
+            if (items.length === 0) {
+                alert("Could not find valid statement rows in the CSV file.");
+                if (progressBox) progressBox.classList.add("hidden");
+                return;
+            }
+            openBulkPreviewModal(items);
+            if (progressBox) progressBox.classList.add("hidden");
+        };
+        reader.readAsText(file);
+    } else if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const b64 = e.target.result;
+                const res = await fetch("/api/scan", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ image_base64: b64, logged_by: "Statement OCR Importer" })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    const item = {
+                        date: data.date || new Date().toISOString().slice(0,10),
+                        particulars: data.purpose || data.receiver_name || "OCR Bank Statement Entry",
+                        reference_number: data.reference_number || data.id,
+                        debit: data.transaction_type === "Credit" ? 0 : strToFloat(data.amount),
+                        credit: data.transaction_type === "Credit" ? strToFloat(data.amount) : 0,
+                        amount: data.amount,
+                        transaction_type: data.transaction_type || "Payment"
+                    };
+                    openBulkPreviewModal([item]);
+                } else {
+                    alert("OCR Parsing failed: " + (data.error || "Unknown error"));
+                }
+            } catch (err) {
+                alert("Failed to parse statement image: " + err.message);
+            }
+            if (progressBox) progressBox.classList.add("hidden");
+        };
+        reader.readAsDataURL(file);
+    } else {
+        alert("Supported statement formats: CSV (.csv), Plain Text (.txt), or Statement Image (JPG, PNG).");
+        if (progressBox) progressBox.classList.add("hidden");
+    }
+}
+
+function parseCsvBankStatement(csvText) {
+    const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) return [];
+
+    let headerIdx = -1;
+    let colMap = { date: -1, particulars: -1, ref: -1, debit: -1, credit: -1, amount: -1, type: -1 };
+
+    for (let i = 0; i < Math.min(lines.length, 10); i++) {
+        const cols = lines[i].split(",").map(c => c.replace(/^"|"$/g, '').trim().toLowerCase());
+        cols.forEach((c, idx) => {
+            if (c.includes("date")) colMap.date = idx;
+            else if (c.includes("particular") || c.includes("desc") || c.includes("payee") || c.includes("narrative")) colMap.particulars = idx;
+            else if (c.includes("inst") || c.includes("ref") || c.includes("trx") || c.includes("cheque") || c.includes("id")) colMap.ref = idx;
+            else if (c.includes("debit") || c.includes("out") || c.includes("withdrawal")) colMap.debit = idx;
+            else if (c.includes("credit") || c.includes("in") || c.includes("deposit")) colMap.credit = idx;
+            else if (c.includes("amount")) colMap.amount = idx;
+            else if (c.includes("type")) colMap.type = idx;
+        });
+
+        if (colMap.date !== -1 && (colMap.particulars !== -1 || colMap.debit !== -1 || colMap.credit !== -1 || colMap.amount !== -1)) {
+            headerIdx = i;
+            break;
+        }
+    }
+
+    const dataLines = headerIdx !== -1 ? lines.slice(headerIdx + 1) : lines;
+    const results = [];
+
+    dataLines.forEach(line => {
+        const rawCols = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || line.split(",");
+        const cols = rawCols.map(c => c.replace(/^"|"$/g, '').trim());
+
+        if (cols.length < 2) return;
+
+        let dStr = colMap.date !== -1 ? cols[colMap.date] : cols[0];
+        let partStr = colMap.particulars !== -1 ? cols[colMap.particulars] : (cols[1] || "Bank Entry");
+        let refStr = colMap.ref !== -1 ? cols[colMap.ref] : (cols[2] || "");
+        let debitVal = colMap.debit !== -1 ? strToFloat(cols[colMap.debit]) : 0;
+        let creditVal = colMap.credit !== -1 ? strToFloat(cols[colMap.credit]) : 0;
+        let amtVal = colMap.amount !== -1 ? strToFloat(cols[colMap.amount]) : 0;
+        let typeStr = colMap.type !== -1 ? cols[colMap.type] : "Payment";
+
+        if (!amtVal) {
+            amtVal = creditVal > 0 ? creditVal : debitVal;
+        }
+        if (creditVal > 0 && !typeStr) typeStr = "Credit";
+
+        if (dStr && (dStr.toLowerCase().includes("date") || dStr.toLowerCase().includes("opening"))) return;
+
+        results.push({
+            date: formatDateIso(dStr),
+            particulars: partStr || "Bank Statement Row",
+            reference_number: refStr,
+            debit: debitVal,
+            credit: creditVal,
+            amount: amtVal.toString(),
+            transaction_type: typeStr
+        });
+    });
+
+    return results;
+}
+
+function formatDateIso(dStr) {
+    if (!dStr) return new Date().toISOString().slice(0,10);
+    try {
+        const parsed = new Date(dStr);
+        if (!isNaN(parsed.getTime())) {
+            return parsed.toISOString().slice(0,10);
+        }
+    } catch(e) {}
+    return new Date().toISOString().slice(0,10);
+}
+
+function openBulkPreviewModal(items) {
+    parsedBulkItems = items;
+    const modal = document.getElementById("bulkPreviewModal");
+    const tbody = document.getElementById("bulkPreviewTableBody");
+
+    if (!modal || !tbody) return;
+
+    let html = "";
+    const existingSet = new Set(allLedgerTransactions.map(t => (t.reference_number || t.id).toLowerCase()));
+
+    items.forEach((item, idx) => {
+        const isDup = existingSet.has((item.reference_number || "").toLowerCase());
+        const dupBadge = isDup ? `<span style="color: #fbbf24; font-size: 10px;">⚠️ Existing</span>` : `<span style="color: #34d399; font-size: 10px;">✅ New</span>`;
+        const checked = isDup ? "" : "checked";
+
+        html += `
+            <tr>
+                <td><input type="checkbox" class="bulk-row-cb" data-idx="${idx}" ${checked} onchange="updateBulkSelectedCount()" /></td>
+                <td>${item.date}</td>
+                <td><b>${item.particulars}</b></td>
+                <td><code>${item.reference_number || 'Auto-ID'}</code></td>
+                <td style="text-align: right; color: #f87171;">${item.debit > 0 ? item.debit.toLocaleString() : '-'}</td>
+                <td style="text-align: right; color: #34d399;">${item.credit > 0 ? item.credit.toLocaleString() : '-'}</td>
+                <td>${dupBadge}</td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = html;
+    updateBulkSelectedCount();
+    modal.classList.remove("hidden");
+}
+
+function updateBulkSelectedCount() {
+    const selected = document.querySelectorAll(".bulk-row-cb:checked").length;
+    const total = parsedBulkItems.length;
+    const summaryText = document.getElementById("bulkParsedSummaryText");
+    if (summaryText) {
+        summaryText.textContent = `${selected} of ${total} transactions selected for continuous ledger import`;
+    }
+}
+
+async function confirmBulkImport() {
+    const selectedCbs = document.querySelectorAll(".bulk-row-cb:checked");
+    if (selectedCbs.length === 0) {
+        alert("Please select at least one transaction to import.");
+        return;
+    }
+
+    const itemsToImport = [];
+    selectedCbs.forEach(cb => {
+        const idx = parseInt(cb.getAttribute("data-idx"));
+        if (parsedBulkItems[idx]) {
+            itemsToImport.push(parsedBulkItems[idx]);
+        }
+    });
+
+    const modal = document.getElementById("bulkPreviewModal");
+    const confirmBtn = document.getElementById("confirmBulkImportBtn");
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "⏳ Importing to Ledger...";
+
+    try {
+        const res = await fetch("/api/bulk-upload-statement", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                transactions: itemsToImport,
+                logged_by: currentUser ? currentUser.name : "Admin Statement Importer"
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            alert(`✅ ${data.message}`);
+            modal.classList.add("hidden");
+            // Automatically reload transactions & re-render continuous bank ledger table on the same page!
+            const txRes = await fetch("/api/transactions?role=admin");
+            if (txRes.ok) {
+                const txData = await txRes.json();
+                allLedgerTransactions = txData.transactions || [];
+                loadBankLedgerStatement();
+                fetchAdminTransactions();
+                fetchDashboardStats();
+            }
+        } else {
+            throw new Error(data.error || "Bulk import failed");
+        }
+    } catch (err) {
+        alert("Import Error: " + err.message);
+    } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "📥 Import Selected Transactions";
+    }
+}
+
 function populateMonthTenureSelect() {
     const monthSelect = document.getElementById("ledgerMonthSelect");
     if (!monthSelect) return;
@@ -597,7 +863,6 @@ function renderBankLedgerTable() {
     const dateFromStr = document.getElementById("ledgerDateFrom")?.value || "";
     const dateToStr = document.getElementById("ledgerDateTo")?.value || "";
 
-    // Sort transactions chronologically (oldest to newest for continuous ledger)
     const sorted = [...allLedgerTransactions].sort((a, b) => {
         const da = new Date(a.date + " " + (a.time || "00:00"));
         const db = new Date(b.date + " " + (b.time || "00:00"));
@@ -605,7 +870,6 @@ function renderBankLedgerTable() {
     });
 
     let currentBalance = DEFAULT_OPENING_BALANCE;
-    let openingBalForFilter = DEFAULT_OPENING_BALANCE;
     let totalDebit = 0.0;
     let totalCredit = 0.0;
 
@@ -613,8 +877,7 @@ function renderBankLedgerTable() {
     let lastMonthHeader = "";
     let renderedCount = 0;
 
-    // Line-by-line ledger calculation
-    sorted.forEach((t, idx) => {
+    sorted.forEach((t) => {
         const amtStr = strToFloat(t.amount);
         const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
         
@@ -623,7 +886,6 @@ function renderBankLedgerTable() {
 
         currentBalance = currentBalance - debitVal + creditVal;
 
-        // Date formatting & Month boundary header
         let tDateObj = new Date(t.date);
         let monthHeaderStr = "";
         let formattedDate = t.date;
@@ -633,7 +895,6 @@ function renderBankLedgerTable() {
             formattedDate = tDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
         }
 
-        // Apply Search & Tenure filters
         let matches = true;
 
         if (searchQuery) {
@@ -659,7 +920,6 @@ function renderBankLedgerTable() {
             totalDebit += debitVal;
             totalCredit += creditVal;
 
-            // Render month boundary divider row when month changes!
             if (monthHeaderStr && monthHeaderStr !== lastMonthHeader) {
                 lastMonthHeader = monthHeaderStr;
                 rowsHtml += `
@@ -691,7 +951,6 @@ function renderBankLedgerTable() {
 
     tbody.innerHTML = rowsHtml;
 
-    // Update Summary Header Cards
     document.getElementById("ledgerOpeningBal").textContent = `PKR ${DEFAULT_OPENING_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalDebit").textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalCredit").textContent = `PKR ${totalCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;

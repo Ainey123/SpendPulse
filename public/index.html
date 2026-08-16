@@ -226,6 +226,23 @@
       <!-- PANEL 2: CONTINUOUS BANK LEDGER STATEMENT (MATCHES USER REFERENCE) -->
       <div id="adminLedgerPanel" class="hidden">
         
+        <!-- Bulk Whole Bank Statement Upload Card -->
+        <div class="upload-card" style="margin-bottom: 20px; padding: 20px; border: 1.5px dashed rgba(99, 102, 241, 0.5);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 17px; color: white;">📤 Bulk Upload Whole Bank Statement File</h3>
+            <span style="font-size: 11px; background: rgba(99,102,241,0.2); color: #818cf8; padding: 4px 10px; border-radius: 12px; font-weight: 600;">CSV / Excel / Statement Image</span>
+          </div>
+          <p style="font-size: 12px; color: #94a3b8; margin-bottom: 14px;">Upload full bank statements (CSV, Excel `.xlsx`/`.csv`, or image). All transactions auto-append to the continuous statement ledger on this exact page seamlessly!</p>
+
+          <div id="bulkStatementDropzone" class="dropzone" style="padding: 24px;">
+            <p style="margin: 0; font-weight: 600; color: #6366f1;">📁 Drag & Drop Bank Statement File (CSV/Excel/Images) or click to browse</p>
+            <span style="font-size: 11px; color: #94a3b8;">Supports full multi-row bank statements with automatic duplicate prevention</span>
+            <input type="file" id="bulkFileInput" accept=".csv,.xlsx,.xls,image/*" hidden />
+          </div>
+
+          <div id="bulkUploadProgress" class="hidden" style="margin-top: 10px;"></div>
+        </div>
+
         <!-- Filter Toolbar -->
         <div class="upload-card" style="margin-bottom: 20px; padding: 20px;">
           <h3 style="margin: 0 0 14px 0; font-size: 18px; color: white;">🔍 Statement Search & Tenure Filters</h3>
@@ -497,6 +514,41 @@
       <div style="display: flex; gap: 10px;">
         <button id="continueSaveBtn" class="btn-primary continue-btn" style="flex: 1;">Continue & Save</button>
         <button id="cancelSaveBtn" class="secondary-btn cancel-btn" style="flex: 1;">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bulk Statement Preview Modal -->
+  <div id="bulkPreviewModal" class="modal-overlay hidden">
+    <div class="modal-box" style="max-width: 780px;">
+      <h3 style="margin: 0 0 8px 0; color: white;">📋 Bank Statement Import Preview</h3>
+      <p style="font-size: 12px; color: #94a3b8; margin-bottom: 16px;">Review parsed transactions before appending to the continuous bank statement ledger.</p>
+
+      <div style="max-height: 340px; overflow-y: auto; margin-bottom: 16px; border: 1px solid var(--panel-border); border-radius: 10px;">
+        <table class="responsive-table bank-ledger-table" style="font-size: 12px;">
+          <thead>
+            <tr>
+              <th style="width: 30px;"><input type="checkbox" id="bulkSelectAll" checked /></th>
+              <th>DATE</th>
+              <th>PARTICULARS</th>
+              <th>REF NO</th>
+              <th style="text-align: right;">DEBIT</th>
+              <th style="text-align: right;">CREDIT</th>
+              <th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody id="bulkPreviewTableBody">
+            <!-- Parsed rows rendered dynamically -->
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span id="bulkParsedSummaryText" style="font-size: 12px; color: #94a3b8;">0 transactions ready for import</span>
+        <div style="display: flex; gap: 10px;">
+          <button id="confirmBulkImportBtn" class="btn-primary" style="background: #10b981;">📥 Import Selected Transactions</button>
+          <button id="cancelBulkImportBtn" class="secondary-btn">Cancel</button>
+        </div>
       </div>
     </div>
   </div>

@@ -612,6 +612,94 @@ def app(environ, start_response):
             start_response(status, headers)
             return res
 
+    # 8. Bulk Statement Upload Endpoint (Appends whole bank statements)
+    if path == "/api/bulk-upload-statement" and method == "POST":
+        try:
+            length = int(environ.get("CONTENT_LENGTH", "0"))
+            body = environ["wsgi.input"].read(length)
+            data = json.loads(body.decode("utf-8"))
+
+            items = data.get("transactions") or []
+            if not items:
+                status, headers, res = _json(400, {"error": "No statement transaction items provided."})
+                start_response(status, headers)
+                return res
+
+            ws_tx, ws_users, sid = get_google_sheet_tabs()
+            existing_rows = ws_tx.get_all_values()
+
+            existing_refs = set()
+            existing_signatures = set()
+
+            if len(existing_rows) > 1:
+                for r in existing_rows[1:]:
+                    if len(r) > 0 and r[0]:
+                        existing_refs.add(str(r[0]).strip().lower())
+                    if len(r) >= 8:
+                        sig = f"{str(r[1]).strip()}_{str(r[3]).replace(',', '').strip()}_{str(r[7]).strip().lower()}"
+                        existing_signatures.add(sig)
+
+            new_rows_to_append = []
+            added_count = 0
+            skipped_count = 0
+
+            for item in items:
+                ref_num = str(item.get("reference_number") or item.get("id") or f"tx_{uuid.uuid4().hex[:8]}").strip()
+                item_date = str(item.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
+                item_time = str(item.get("time") or datetime.now().strftime("%I:%M %p")).strip()
+                amt_str = str(item.get("amount") or "0").replace(",", "").strip()
+                curr = str(item.get("currency") or "PKR").strip()
+                sender = str(item.get("sender_name") or "").strip()
+                receiver = str(item.get("receiver_name") or item.get("particulars") or "").strip()
+                purpose = str(item.get("purpose") or item.get("particulars") or "Bank Statement Import").strip()
+                tx_type = str(item.get("transaction_type") or "Payment").strip()
+                tx_id = f"tx_{uuid.uuid4().hex[:8]}"
+
+                sig_key = f"{item_date}_{amt_str}_{receiver.lower()}"
+                if (ref_num.lower() in existing_refs and ref_num != "") or sig_key in existing_signatures:
+                    skipped_count += 1
+                    continue
+
+                row = [
+                    ref_num,
+                    item_date,
+                    item_time,
+                    amt_str,
+                    curr,
+                    sender,
+                    "",
+                    receiver,
+                    "",
+                    purpose,
+                    tx_type,
+                    "[]",
+                    data.get("logged_by") or "Bank Statement Importer",
+                    "Completed",
+                    "100%",
+                    "",
+                    tx_id
+                ]
+
+                new_rows_to_append.append(row)
+                existing_refs.add(ref_num.lower())
+                existing_signatures.add(sig_key)
+                added_count += 1
+
+            if new_rows_to_append:
+                ws_tx.append_rows(new_rows_to_append)
+
+            status, headers, res = _json(200, {
+                "message": f"Successfully imported {added_count} statement transactions ({skipped_count} duplicates skipped).",
+                "added_count": added_count,
+                "skipped_count": skipped_count
+            })
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
     status, headers, res = _json(404, {"error": "Not found"})
     start_response(status, headers)
     return res

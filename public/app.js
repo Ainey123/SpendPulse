@@ -1030,9 +1030,13 @@ async function parsePdfBankStatementWithPositions(pdf, progressBox) {
         }
         if (currentBlock) blocks.push(currentBlock);
 
+        let runningBalance = null;
         for (const block of blocks) {
-            const tx = parseUniversalSingleBlock(block, detectedBoundaries, detectedBank);
-            if (tx) transactions.push(tx);
+            const tx = parseUniversalSingleBlock(block, detectedBoundaries, detectedBank, runningBalance);
+            if (tx) {
+                transactions.push(tx);
+                if (tx.balance > 0) runningBalance = tx.balance;
+            }
         }
     }
 
@@ -1138,74 +1142,75 @@ function detectUniversalColumnBoundaries(items) {
     };
 }
 
-function parseUniversalSingleBlock(block, boundaries, bankName) {
+function parseUniversalSingleBlock(block, boundaries, bankName, prevBalance = null) {
     let fullText = block.lines.join(" ");
     fullText = fullText.replace(/\d{8}\s+\d{8}Page\s+\d+\s+of\s+\d+/gi, '').replace(/Page\s+\d+\s+of\s+\d+/gi, '').trim();
     if (fullText.toLowerCase().includes("opening balance")) return null;
 
     const dateRes = UniversalBankEngine.parseUniversalDate(block.dateRaw);
 
-    const numbers = [];
+    // Extract numbers:
+    // Format A: item at x > 300 (e.g. x~366) contains "debit_or_credit balance"
+    // Format B: entire row text contains numbers at end
+    let amountVal = null;
+    let balanceVal = null;
 
-    for (const item of block.items) {
-        const strVal = item.str.trim();
-        
-        if (/^\d{8}$/.test(strVal) || /^Page$/i.test(strVal) || /^of$/i.test(strVal)) continue;
-        if (/^03\d{9}$/.test(strVal)) continue;
-        if (/^PK\d{2}[A-Z]{4}\d{16}$/i.test(strVal)) continue;
-        if (/^\d{10,16}$/.test(strVal) && !strVal.includes('.')) continue;
+    const amountItem = block.items.find(i => Math.abs(i.x - 366) < 20 || i.x > 320);
 
-        const numMatch = strVal.match(/^\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?$/);
-        if (numMatch) {
-            const val = parseFloat(strVal.replace(/,/g, ''));
-            if (!isNaN(val) && val > 0 && val !== 2026 && val !== 2025 && val !== 2024 && val !== 180 && val !== 33) {
-                numbers.push({ val, x: item.x, str: strVal });
-            }
+    const extractNums = (textStr) => {
+        const tokens = textStr.match(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g) || [];
+        const res = [];
+        for (const t of tokens) {
+            if (/^\d{8}$/.test(t) || /^03\d{9}$/.test(t) || /^PK\d{2}/i.test(t) || (/^\d{10,}$/.test(t) && !t.includes('.'))) continue;
+            if (t === "2026" || t === "2025" || t === "2024" || t === "180" || t === "33") continue;
+            const val = parseFloat(t.replace(/,/g, ''));
+            if (!isNaN(val) && val > 0) res.push(val);
+        }
+        return res;
+    };
+
+    if (amountItem) {
+        const nums = extractNums(amountItem.str);
+        if (nums.length >= 2) {
+            amountVal = nums[0];
+            balanceVal = nums[nums.length - 1];
+        } else if (nums.length === 1) {
+            balanceVal = nums[0];
+        }
+    }
+
+    if (amountVal === null) {
+        const rowNoDate = fullText.replace(/^(\d{1,2})[-\/\.](\d{1,2})[-\/\.](\d{2,4})\s*/, '');
+        const nums = extractNums(rowNoDate);
+        if (nums.length >= 2) {
+            amountVal = nums[nums.length - 2];
+            balanceVal = nums[nums.length - 1];
+        } else if (nums.length === 1) {
+            balanceVal = nums[0];
         }
     }
 
     let debit = 0.0;
     let credit = 0.0;
-    let balance = 0.0;
     let valStatus = dateRes.status;
 
-    const drCrMatch = fullText.match(/(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\s*(DR|CR)\b/i);
-    if (drCrMatch) {
-        const amtVal = parseFloat(drCrMatch[1].replace(/,/g, ''));
-        const flag = drCrMatch[2].toUpperCase();
-        if (flag === "DR") debit = amtVal;
-        else credit = amtVal;
-        if (numbers.length >= 1) balance = numbers[numbers.length - 1].val;
-    } else {
-        numbers.forEach(n => {
-            if (n.x >= boundaries.credit_balance_mid - 25) {
-                if (balance === 0.0) balance = n.val;
-            } else if (n.x >= boundaries.debit_credit_mid - 15) {
-                if (boundaries.isReverseColumnOrder) {
-                    if (debit === 0.0) debit = n.val;
-                } else {
-                    if (credit === 0.0) credit = n.val;
-                }
-            } else {
-                if (boundaries.isReverseColumnOrder) {
-                    if (credit === 0.0) credit = n.val;
-                } else {
-                    if (debit === 0.0) debit = n.val;
-                }
-            }
-        });
-
-        if (numbers.length >= 2 && balance === 0.0) {
-            balance = numbers[numbers.length - 1].val;
-            const txAmt = numbers[numbers.length - 2].val;
-            const isCredit = /\bAc Transfer Cr\b|\bIBFT From CMS\b|\bCheque Deposited\b|\bCredit\b|\bdeposit\b/i.test(fullText)
-                             && !/\bTo\s+[A-Z]/i.test(fullText);
-            if (isCredit) credit = txAmt;
-            else debit = txAmt;
-        } else if (numbers.length === 1 && balance === 0.0) {
-            balance = numbers[0].val;
+    if (amountVal !== null && balanceVal !== null && prevBalance !== null && prevBalance > 0) {
+        if (Math.abs((prevBalance - amountVal) - balanceVal) <= 0.05) {
+            debit = amountVal;
+        } else if (Math.abs((prevBalance + amountVal) - balanceVal) <= 0.05) {
+            credit = amountVal;
+        } else {
+            const isCreditKw = /\bAc Transfer Cr\b|\bIBFT From CMS\b|\bCheque Deposited\b|\bCredit\b|\bdeposit\b/i.test(fullText) && !/\bTo\s+[A-Z]/i.test(fullText);
+            if (isCreditKw) credit = amountVal;
+            else debit = amountVal;
         }
+    } else if (amountVal !== null) {
+        const isCreditKw = /\bAc Transfer Cr\b|\bIBFT From CMS\b|\bCheque Deposited\b|\bCredit\b|\bdeposit\b/i.test(fullText) && !/\bTo\s+[A-Z]/i.test(fullText);
+        if (isCreditKw) credit = amountVal;
+        else debit = amountVal;
     }
+
+    const balance = balanceVal !== null ? balanceVal : 0.0;
 
     if (debit === 0.0 && credit === 0.0 && balance > 0.0) {
         valStatus = "DEBIT_CREDIT_REVIEW_REQUIRED";

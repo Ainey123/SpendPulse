@@ -911,12 +911,10 @@ class UniversalBankEngine {
             let year = parseInt(m1[3], 10);
             if (year < 100) year += 2000;
 
-            if (day > 12 && month <= 12) {
+            if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
                 return { isoDate: `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`, status: "VALID" };
-            } else if (month > 12 && day <= 12) {
+            } else if (month >= 1 && month <= 31 && day >= 1 && day <= 12) {
                 return { isoDate: `${year}-${String(day).padStart(2,'0')}-${String(month).padStart(2,'0')}`, status: "VALID" };
-            } else if (month <= 12 && day <= 31) {
-                return { isoDate: `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`, status: "VALID" };
             }
         }
 
@@ -1011,7 +1009,9 @@ async function parsePdfBankStatementWithPositions(pdf, progressBox) {
             if (lowerText.startsWith("page ") || lowerText.startsWith("statement of account") || 
                 lowerText.startsWith("title of account") || lowerText.startsWith("registered address") ||
                 lowerText.startsWith("raiwind road") || lowerText.includes("date description") ||
-                lowerText.includes("cheq/inst") || lowerText.includes("opening balance")) {
+                lowerText.includes("cheq/inst") || lowerText.includes("opening balance") ||
+                /\d{8}\s+\d{8}page\s+\d+\s+of\s+\d+/i.test(lineText) ||
+                /\bpage\s+\d+\s+of\s+\d+/i.test(lineText) || lowerText.includes("page of")) {
                 continue;
             }
 
@@ -1140,7 +1140,8 @@ function detectUniversalColumnBoundaries(items) {
 }
 
 function parseUniversalSingleBlock(block, boundaries, bankName) {
-    const fullText = block.lines.join(" ");
+    let fullText = block.lines.join(" ");
+    fullText = fullText.replace(/\d{8}\s+\d{8}Page\s+\d+\s+of\s+\d+/gi, '').replace(/Page\s+\d+\s+of\s+\d+/gi, '').trim();
     if (fullText.toLowerCase().includes("opening balance")) return null;
 
     const dateRes = UniversalBankEngine.parseUniversalDate(block.dateRaw);
@@ -1150,6 +1151,7 @@ function parseUniversalSingleBlock(block, boundaries, bankName) {
     for (const item of block.items) {
         const strVal = item.str.trim();
         
+        if (/^\d{8}$/.test(strVal) || /^Page$/i.test(strVal) || /^of$/i.test(strVal)) continue;
         if (/^03\d{9}$/.test(strVal)) continue;
         if (/^PK\d{2}[A-Z]{4}\d{16}$/i.test(strVal)) continue;
         if (/^\d{10,16}$/.test(strVal) && !strVal.includes('.')) continue;
@@ -1590,10 +1592,23 @@ function renderBankLedgerTable() {
             totalDebit += t._calcDebit;
             totalCredit += t._calcCredit;
 
-            let tDateObj = new Date(t.date);
             let formattedDate = t.date;
-            if (!isNaN(tDateObj.getTime())) {
-                formattedDate = tDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+            if (t.date) {
+                const parts = t.date.trim().split(/[-\/\.]/);
+                const monthsList = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                if (parts.length === 3) {
+                    if (parts[0].length === 4) {
+                        const y = parts[0];
+                        const mIdx = parseInt(parts[1], 10) - 1;
+                        const d = String(parseInt(parts[2], 10)).padStart(2, '0');
+                        if (mIdx >= 0 && mIdx < 12) formattedDate = `${d}-${monthsList[mIdx]}-${y}`;
+                    } else if (parts[2].length === 4) {
+                        const d = String(parseInt(parts[0], 10)).padStart(2, '0');
+                        const mIdx = parseInt(parts[1], 10) - 1;
+                        const y = parts[2];
+                        if (mIdx >= 0 && mIdx < 12) formattedDate = `${d}-${monthsList[mIdx]}-${y}`;
+                    }
+                }
             }
 
             const particularsText = t.particulars || t.purpose || `POS SALE / PAYMENT TO ${t.receiver_name || t.sender_name || 'MERCHANT'}`;

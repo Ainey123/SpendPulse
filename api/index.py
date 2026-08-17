@@ -63,12 +63,10 @@ class UniversalBankParser:
         if m1:
             d, m, y = int(m1.group(1)), int(m1.group(2)), int(m1.group(3))
             if y < 100: y += 2000
-            if d > 12 and m <= 12:
+            if 1 <= d <= 31 and 1 <= m <= 12:
                 return f"{y:04d}-{m:02d}-{d:02d}", "VALID"
-            elif m > 12 and d <= 12:
+            elif 1 <= m <= 31 and 1 <= d <= 12:
                 return f"{y:04d}-{d:02d}-{m:02d}", "VALID"
-            elif d <= 12 and m <= 12:
-                return f"{y:04d}-{m:02d}-{d:02d}", "VALID"
 
         m2 = re.match(r'^(\d{4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})$', clean)
         if m2:

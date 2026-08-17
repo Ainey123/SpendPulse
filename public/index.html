@@ -248,6 +248,35 @@
           <div id="bulkUploadProgress" class="hidden" style="margin-top: 10px;"></div>
         </div>
 
+        <!-- AI Financial Assistant Chatbot Panel -->
+        <div class="upload-card" style="margin-bottom: 20px; padding: 20px; background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%); border: 1.5px solid #6366f1;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; font-size: 18px; color: white;">🤖 Bank Statement AI Assistant</h3>
+            <span style="font-size: 11px; background: rgba(99,102,241,0.3); color: #c7d2fe; padding: 4px 10px; border-radius: 12px; font-weight: 600;">Database Verified Data Only</span>
+          </div>
+          <p style="font-size: 12px; color: #94a3b8; margin-bottom: 14px;">Ask questions in natural language. The AI searches verified database records first, calculates exact backend metrics, and explains the results accurately.</p>
+
+          <div style="display: flex; gap: 10px; margin-bottom: 14px;">
+            <input type="text" id="chatQueryInput" class="form-input" placeholder="e.g. Show me all payments made to Muhammad Imran from January 2026 to March 2026" style="flex: 1;" />
+            <button id="chatSubmitBtn" class="btn-primary" style="padding: 10px 20px; font-size: 13px; whitespace: nowrap;">🔍 Ask AI</button>
+          </div>
+
+          <div id="chatResponseCard" class="hidden" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(99, 102, 241, 0.4); padding: 16px; border-radius: 10px; margin-top: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-weight: 700; color: #818cf8; font-size: 14px;">✨ Verified AI Answer</span>
+              <span id="chatQueryStatusBadge" style="font-size: 11px; color: #34d399;">● Data Verified</span>
+            </div>
+            <div id="chatAiAnswerText" style="font-size: 14px; line-height: 1.6; color: #e2e8f0; margin-bottom: 14px; white-space: pre-wrap;"></div>
+            
+            <div id="chatSummaryGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; background: #0f172a; padding: 12px; border-radius: 8px; font-size: 12px;">
+              <div><span style="color: #94a3b8;">Total Records:</span> <b id="chatSumCount" style="color: white;">0</b></div>
+              <div><span style="color: #94a3b8;">Total Sent (Debit):</span> <b id="chatSumDebit" style="color: #f87171;">PKR 0.00</b></div>
+              <div><span style="color: #94a3b8;">Total Received (Credit):</span> <b id="chatSumCredit" style="color: #34d399;">PKR 0.00</b></div>
+              <div><span style="color: #94a3b8;">Net Volume:</span> <b id="chatSumNet" style="color: #fbbf24;">PKR 0.00</b></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Filter Toolbar -->
         <div class="upload-card" style="margin-bottom: 20px; padding: 20px;">
           <h3 style="margin: 0 0 14px 0; font-size: 18px; color: white;">🔍 Statement Search & Tenure Filters</h3>
@@ -334,13 +363,13 @@
             <table class="responsive-table bank-ledger-table">
               <thead>
                 <tr>
-                  <th style="width: 130px;">DATE</th>
+                  <th style="width: 120px;">DATE</th>
                   <th>PARTICULARS</th>
                   <th style="width: 140px;">INST. NO. / REF</th>
-                  <th style="width: 120px; text-align: right;">DEBIT</th>
-                  <th style="width: 120px; text-align: right;">CREDIT</th>
-                  <th style="width: 150px; text-align: right;">RUNNING BALANCE</th>
-                  <th style="width: 80px; text-align: center;">ACTIONS</th>
+                  <th style="width: 110px; text-align: right;">DEBIT</th>
+                  <th style="width: 110px; text-align: right;">CREDIT</th>
+                  <th style="width: 140px; text-align: right;">RUNNING BALANCE</th>
+                  <th style="width: 110px; text-align: center;">ACTIONS</th>
                 </tr>
               </thead>
               <tbody id="bankLedgerTableBody">
@@ -548,21 +577,43 @@
 
   <!-- Bulk Statement Preview Modal -->
   <div id="bulkPreviewModal" class="modal-overlay hidden">
-    <div class="modal-box" style="max-width: 780px;">
-      <h3 style="margin: 0 0 8px 0; color: white;">📋 Bank Statement Import Preview</h3>
-      <p style="font-size: 12px; color: #94a3b8; margin-bottom: 16px;">Review parsed transactions before appending to the continuous bank statement ledger.</p>
+    <div class="modal-box" style="max-width: 900px; width: 95%;">
+      <h3 style="margin: 0 0 4px 0; color: white;">📋 Bank Statement Upload Validation Report & Preview</h3>
+      <p style="font-size: 12px; color: #94a3b8; margin-bottom: 14px;">Every transaction extracted from all pages is validated. Review audit status before importing to ledger.</p>
 
-      <div style="max-height: 340px; overflow-y: auto; margin-bottom: 16px; border: 1px solid var(--panel-border); border-radius: 10px;">
+      <!-- Upload Validation & Reconciliation Summary Report -->
+      <div id="reconciliationReportBox" style="background: #0f172a; border: 1.5px solid rgba(99,102,241,0.4); padding: 14px; border-radius: 10px; margin-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <span style="font-weight: 700; color: #818cf8; font-size: 14px;">📊 Audit Reconciliation Report</span>
+          <span id="recStatusBadge" style="font-size: 11px; padding: 3px 8px; border-radius: 6px; font-weight: bold; background: rgba(52,211,153,0.2); color: #34d399;">✓ Pages & Balance Reconciled</span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; font-size: 12px;">
+          <div><span style="color: #94a3b8;">Total Pages:</span> <b id="recPagesCount" style="color: white;">0</b></div>
+          <div><span style="color: #94a3b8;">Total Extracted:</span> <b id="recTxCount" style="color: white;">0</b></div>
+          <div><span style="color: #94a3b8;">Total Debit:</span> <b id="recTotalDebit" style="color: #f87171;">PKR 0.00</b></div>
+          <div><span style="color: #94a3b8;">Total Credit:</span> <b id="recTotalCredit" style="color: #34d399;">PKR 0.00</b></div>
+          <div><span style="color: #94a3b8;">Opening Balance:</span> <b id="recOpeningBal" style="color: #38bdf8;">PKR 0.00</b></div>
+          <div><span style="color: #94a3b8;">Closing Balance:</span> <b id="recClosingBal" style="color: #818cf8;">PKR 0.00</b></div>
+          <div><span style="color: #94a3b8;">Balance Mismatches:</span> <b id="recMismatchCount" style="color: #fbbf24;">0</b></div>
+          <div><span style="color: #94a3b8;">Review Required:</span> <b id="recReviewCount" style="color: #f87171;">0</b></div>
+        </div>
+        <div id="recMismatchPagesNotice" class="hidden" style="font-size: 11px; color: #fbbf24; margin-top: 8px; font-family: monospace;"></div>
+      </div>
+
+      <div style="max-height: 320px; overflow-y: auto; margin-bottom: 16px; border: 1px solid var(--panel-border); border-radius: 10px;">
         <table class="responsive-table bank-ledger-table" style="font-size: 12px;">
           <thead>
             <tr>
               <th style="width: 30px;"><input type="checkbox" id="bulkSelectAll" checked /></th>
+              <th>PAGE</th>
               <th>DATE</th>
               <th>PARTICULARS</th>
               <th>REF NO</th>
               <th style="text-align: right;">DEBIT</th>
               <th style="text-align: right;">CREDIT</th>
-              <th>STATUS</th>
+              <th style="text-align: right;">BALANCE (PDF)</th>
+              <th>VALIDATION</th>
+              <th style="text-align: center;">SOURCE</th>
             </tr>
           </thead>
           <tbody id="bulkPreviewTableBody">
@@ -578,6 +629,23 @@
           <button id="cancelBulkImportBtn" class="secondary-btn">Cancel</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Raw Text / Source Page Audit Modal -->
+  <div id="rawSourceModal" class="modal-overlay hidden">
+    <div class="modal-box" style="max-width: 600px;">
+      <h3 style="margin: 0 0 8px 0; color: white;">📄 Original PDF Transaction Source</h3>
+      <div style="display: flex; gap: 12px; font-size: 12px; margin-bottom: 12px;">
+        <div><span style="color: #94a3b8;">Source Page:</span> <b id="modalSourcePageNum" style="color: #38bdf8;">Page 1</b></div>
+        <div><span style="color: #94a3b8;">Transaction Date:</span> <b id="modalSourceDate" style="color: white;">-</b></div>
+        <div><span style="color: #94a3b8;">Validation Status:</span> <b id="modalSourceStatus" style="color: #34d399;">VALID</b></div>
+      </div>
+      <div style="background: #0f172a; border: 1px solid rgba(255,255,255,0.1); padding: 14px; border-radius: 8px; margin-bottom: 16px;">
+        <label style="font-size: 11px; color: #94a3b8; display: block; margin-bottom: 6px;">RAW EXTRACTED PDF LINE TEXT:</label>
+        <pre id="modalSourceRawText" style="white-space: pre-wrap; font-family: monospace; font-size: 12px; color: #fbbf24; margin: 0; max-height: 200px; overflow-y: auto;"></pre>
+      </div>
+      <button id="closeSourceModalBtn" class="secondary-btn" style="width: 100%;">Close</button>
     </div>
   </div>
 

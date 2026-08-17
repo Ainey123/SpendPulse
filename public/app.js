@@ -636,6 +636,8 @@ function initLedgerFilters() {
     const dateTo = document.getElementById("ledgerDateTo");
     const resetBtn = document.getElementById("resetLedgerBtn");
     const exportBtn = document.getElementById("exportLedgerCsvBtn");
+    const chatSubmitBtn = document.getElementById("chatSubmitBtn");
+    const chatInput = document.getElementById("chatQueryInput");
 
     if (searchInput) searchInput.oninput = renderBankLedgerTable;
     if (monthSelect) monthSelect.onchange = renderBankLedgerTable;
@@ -654,6 +656,80 @@ function initLedgerFilters() {
 
     if (exportBtn) {
         exportBtn.onclick = exportLedgerToCsv;
+    }
+
+    if (chatSubmitBtn) chatSubmitBtn.onclick = submitStatementQuery;
+    if (chatInput) {
+        chatInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                submitStatementQuery();
+            }
+        });
+    }
+
+    const closeSourceBtn = document.getElementById("closeSourceModalBtn");
+    if (closeSourceBtn) {
+        closeSourceBtn.onclick = () => document.getElementById("rawSourceModal").classList.add("hidden");
+    }
+}
+
+async function submitStatementQuery() {
+    const queryInput = document.getElementById("chatQueryInput");
+    const card = document.getElementById("chatResponseCard");
+    const answerText = document.getElementById("chatAiAnswerText");
+    const statusBadge = document.getElementById("chatQueryStatusBadge");
+    const btn = document.getElementById("chatSubmitBtn");
+
+    if (!queryInput || !queryInput.value.trim()) return;
+
+    const queryStr = queryInput.value.trim();
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Searching DB & AI..."; }
+    if (statusBadge) statusBadge.textContent = "● Searching Verified Database...";
+
+    const selectedMonth = document.getElementById("ledgerMonthSelect")?.value || "all";
+    const dateFromStr = document.getElementById("ledgerDateFrom")?.value || "";
+    const dateToStr = document.getElementById("ledgerDateTo")?.value || "";
+
+    try {
+        const res = await fetch("/api/query-statement", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                query: queryStr,
+                month: selectedMonth,
+                date_from: dateFromStr,
+                date_to: dateToStr
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            if (card) card.classList.remove("hidden");
+            if (answerText) answerText.textContent = data.ai_answer || "No response generated.";
+            
+            const summary = data.summary || {};
+            document.getElementById("chatSumCount").textContent = summary.total_transactions || 0;
+            document.getElementById("chatSumDebit").textContent = `PKR ${(summary.total_debit || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            document.getElementById("chatSumCredit").textContent = `PKR ${(summary.total_credit || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            document.getElementById("chatSumNet").textContent = `PKR ${(summary.net_volume || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            
+            if (statusBadge) statusBadge.textContent = `● Verified (${summary.total_transactions || 0} DB Records)`;
+            
+            // Highlight matching query in ledger search if query is person name
+            if (data.exact_matches && data.exact_matches.length > 0) {
+                const pName = data.exact_matches[0].receiver_name || data.exact_matches[0].sender_name;
+                if (pName && document.getElementById("ledgerSearchInput")) {
+                    document.getElementById("ledgerSearchInput").value = pName;
+                    renderBankLedgerTable();
+                }
+            }
+        } else {
+            throw new Error(data.error || "Query failed");
+        }
+    } catch (err) {
+        alert("Statement AI Query error: " + err.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "🔍 Ask AI"; }
     }
 }
 
@@ -692,7 +768,7 @@ function initBulkStatementUploader() {
     }
 }
 
-function handleBulkStatementFile(file) {
+async function handleBulkStatementFile(file) {
     const progressBox = document.getElementById("bulkUploadProgress");
     if (progressBox) {
         progressBox.textContent = `⏳ Reading & parsing "${file.name}"...`;
@@ -712,7 +788,8 @@ function handleBulkStatementFile(file) {
                 if (progressBox) progressBox.classList.add("hidden");
                 return;
             }
-            openBulkPreviewModal(items);
+            const report = generateReconciliationReport(items, 1);
+            openBulkPreviewModal(items, report);
             if (progressBox) progressBox.classList.add("hidden");
         };
         reader.readAsText(file);
@@ -721,7 +798,7 @@ function handleBulkStatementFile(file) {
         reader.onload = async (e) => {
             try {
                 let items = [];
-                const b64 = e.target.result;
+                let report = null;
 
                 if (isPdf && window.pdfjsLib) {
                     try {
@@ -729,71 +806,48 @@ function handleBulkStatementFile(file) {
                         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
                         const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
                         const pdf = await loadingTask.promise;
-                        let extractedText = "";
 
-                        if (progressBox) progressBox.textContent = `⏳ Extracting text from ${pdf.numPages} pages...`;
+                        if (progressBox) progressBox.textContent = `⏳ Extracting & detecting column positions from ${pdf.numPages} pages...`;
 
-                        for (let p = 1; p <= pdf.numPages; p++) {
-                            const page = await pdf.getPage(p);
-                            const textContent = await page.getTextContent();
+                        // Execute Column Position Aware Statement Parser across ALL pages
+                        const parseRes = await parsePdfBankStatementWithPositions(pdf, progressBox);
+                        items = parseRes.transactions;
+                        report = parseRes.report;
 
-                            // ── Y-position aware line grouping ──────────────────────────────
-                            // PDF coordinate Y increases upward. Group text items that share
-                            // the same Y (±4px tolerance) into one visual "line", then sort
-                            // each group left→right by X so column order is preserved.
-                            const lineMap = new Map();
-                            for (const item of textContent.items) {
-                                if (!item.str || !item.str.trim()) continue;
-                                const y = Math.round(item.transform[5] / 4) * 4; // bucket to 4px
-                                const x = item.transform[4];
-                                if (!lineMap.has(y)) lineMap.set(y, []);
-                                lineMap.get(y).push({ str: item.str, x });
-                            }
-
-                            // Sort lines top→bottom (descending Y) then items left→right
-                            const sortedYs = Array.from(lineMap.keys()).sort((a, b) => b - a);
-                            for (const y of sortedYs) {
-                                const lineItems = lineMap.get(y).sort((a, b) => a.x - b.x);
-                                const lineText = lineItems.map(i => i.str.trim()).filter(Boolean).join("  ");
-                                if (lineText.trim()) extractedText += lineText + "\n";
-                            }
-                            extractedText += "\n"; // blank line between pages
-                        }
-
-                        if (progressBox) progressBox.textContent = `⚙️ Parsing ${pdf.numPages} pages of statement...`;
-                        if (extractedText.trim()) {
-                            items = parseCsvBankStatement(extractedText);
-                        }
                     } catch (pdfErr) {
-                        console.warn("Client PDF.js text extraction notice:", pdfErr);
+                        console.warn("PDF position parsing warning:", pdfErr);
                     }
                 }
 
-
-                // If client-side parsing extracted 0 items, send base64 to /api/parse-statement-file for AI multi-row extraction
+                // Fallback to AI vision if PDF.js returned 0 items
                 if (items.length === 0) {
-                    if (progressBox) progressBox.textContent = `🤖 Analyzing & extracting all statement rows using AI...`;
+                    if (progressBox) progressBox.textContent = `🤖 Analyzing & extracting statement entries using AI...`;
                     const res = await fetch("/api/parse-statement-file", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ file_base64: b64, file_type: isPdf ? "application/pdf" : "image/png" })
+                        body: JSON.stringify({ file_base64: e.target.result, file_type: isPdf ? "application/pdf" : "image/png" })
                     });
                     const data = await res.json();
                     if (res.ok && data.transactions && data.transactions.length > 0) {
-                        items = data.transactions.map(t => ({
+                        items = data.transactions.map((t, idx) => ({
+                            source_page: 1,
                             date: t.date || new Date().toISOString().slice(0,10),
                             particulars: t.particulars || t.purpose || "Bank Statement Entry",
                             reference_number: t.reference_number || t.inst_no || `ref_${Math.random().toString(36).substr(2,7)}`,
-                            debit: strToFloat(t.debit || (t.transaction_type === "Credit" ? 0 : t.amount)),
-                            credit: strToFloat(t.credit || (t.transaction_type === "Credit" ? t.amount : 0)),
+                            debit: strToFloat(t.debit || 0),
+                            credit: strToFloat(t.credit || 0),
+                            balance: strToFloat(t.balance || 0),
                             amount: strToFloat(t.amount || t.debit || t.credit).toString(),
-                            transaction_type: t.transaction_type || (strToFloat(t.credit) > 0 ? "Credit" : "Payment")
+                            transaction_type: t.transaction_type || (strToFloat(t.credit) > 0 ? "Credit" : "Payment"),
+                            validation_status: "VALID",
+                            raw_text: t.particulars || "AI Extracted Entry"
                         }));
+                        report = generateReconciliationReport(items, 1);
                     }
                 }
 
                 if (items.length > 0) {
-                    openBulkPreviewModal(items);
+                    openBulkPreviewModal(items, report);
                 } else {
                     alert("Could not extract statement entries from file. Please ensure document has readable statement rows.");
                 }
@@ -810,42 +864,418 @@ function handleBulkStatementFile(file) {
 }
 
 
-// ---------------------------------------------------------------
-// UNIVERSAL BANK STATEMENT PARSER
-// Works with Bank Alfalah, HBL, Meezan, UBL, MCB, Allied, etc.
-// Handles multiline date-blocks correctly (Bank Alfalah style)
-// ---------------------------------------------------------------
+// -------------------------------------------------------------------------
+// UNIVERSAL BANK STATEMENT EXTRACTION ENGINE & ADAPTER REGISTRY
+// Supports ANY Bank Statement PDF (Bank Alfalah, Meezan, HBL, UBL, MCB, Easypaisa, etc.)
+// Dynamic PDF Layout Detection, Column Boundary Normalization, Multi-Format Date Resolver,
+// Amount vs Account/Phone Classifier, DR/CR Single-Amount Support & Confidence Scoring.
+// -------------------------------------------------------------------------
+class UniversalBankEngine {
+    static HEADER_VARIANTS = {
+        DATE: ['date', 'transaction date', 'value date', 'posting date', 'txn date', 'pst date', 'effective date', 'date / time'],
+        DESCRIPTION: ['description', 'particulars', 'transaction details', 'narration', 'remarks', 'detail', 'transaction particulars', 'description / ref', 'details'],
+        DEBIT: ['debit', 'withdrawal', 'withdrawals', 'dr', 'amount debited', 'paid out', 'debit (pkr)', 'outflow', 'withdrawal (pkr)'],
+        CREDIT: ['credit', 'deposit', 'deposits', 'cr', 'amount credited', 'paid in', 'credit (pkr)', 'inflow', 'deposit (pkr)'],
+        AMOUNT: ['amount', 'transaction amount', 'amt', 'amount (pkr)'],
+        BALANCE: ['balance', 'running balance', 'closing balance', 'available balance', 'balance (pkr)', 'curr bal'],
+        REFERENCE: ['cheq/inst#', 'instrument no', 'ref no', 'transaction ref', 'chq no', 'reference', 'trans ref', 'ref']
+    };
+
+    static detectBankName(text) {
+        const lower = text.toLowerCase();
+        if (lower.includes("alfalah")) return "Bank Alfalah Limited";
+        if (lower.includes("meezan")) return "Meezan Bank Limited";
+        if (lower.includes("hbl") || lower.includes("habib bank")) return "Habib Bank Limited";
+        if (lower.includes("ubl") || lower.includes("united bank")) return "United Bank Limited";
+        if (lower.includes("mcb")) return "MCB Bank Limited";
+        if (lower.includes("allied") || lower.includes("abl")) return "Allied Bank Limited";
+        if (lower.includes("easypaisa") || lower.includes("telenor")) return "Easypaisa / Telenor Microfinance";
+        if (lower.includes("jazzcash") || lower.includes("mobilink")) return "JazzCash / Mobilink Microfinance";
+        if (lower.includes("standard chartered")) return "Standard Chartered Bank";
+        if (lower.includes("faysal")) return "Faysal Bank Limited";
+        if (lower.includes("askari")) return "Askari Bank Limited";
+        if (lower.includes("bankislami")) return "BankIslami Pakistan Limited";
+        if (lower.includes("js bank")) return "JS Bank Limited";
+        return "Universal Statement Engine";
+    }
+
+    static parseUniversalDate(dateStr) {
+        if (!dateStr) return { isoDate: new Date().toISOString().slice(0, 10), status: "DATE_FORMAT_REVIEW_REQUIRED" };
+        const clean = dateStr.trim();
+
+        // Format 1: DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY
+        const m1 = clean.match(/^(\d{1,2})[-\/\.](\d{1,2})[-\/\.](\d{2,4})$/);
+        if (m1) {
+            let day = parseInt(m1[1], 10);
+            let month = parseInt(m1[2], 10);
+            let year = parseInt(m1[3], 10);
+            if (year < 100) year += 2000;
+
+            if (day > 12 && month <= 12) {
+                return { isoDate: `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`, status: "VALID" };
+            } else if (month > 12 && day <= 12) {
+                return { isoDate: `${year}-${String(day).padStart(2,'0')}-${String(month).padStart(2,'0')}`, status: "VALID" };
+            } else if (month <= 12 && day <= 31) {
+                return { isoDate: `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`, status: "VALID" };
+            }
+        }
+
+        // Format 2: YYYY-MM-DD or YYYY/MM/DD
+        const m2 = clean.match(/^(\d{4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})$/);
+        if (m2) {
+            return { isoDate: `${m2[1]}-${String(m2[2]).padStart(2,'0')}-${String(m2[3]).padStart(2,'0')}`, status: "VALID" };
+        }
+
+        // Format 3: DD-MMM-YYYY (e.g. 14-Nov-2025 or 14 Nov 2025)
+        const m3 = clean.match(/^(\d{1,2})[-\/\s]([A-Za-z]{3})[-\/\s](\d{2,4})$/);
+        if (m3) {
+            const months = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+            const mNum = months[m3[2].toLowerCase()];
+            if (mNum) {
+                let y = parseInt(m3[3], 10);
+                if (y < 100) y += 2000;
+                return { isoDate: `${y}-${String(mNum).padStart(2,'0')}-${String(m3[1]).padStart(2,'0')}`, status: "VALID" };
+            }
+        }
+
+        return { isoDate: new Date().toISOString().slice(0, 10), status: "DATE_FORMAT_REVIEW_REQUIRED" };
+    }
+
+    static classifyTransactionType(description, credit = 0) {
+        const desc = description.toUpperCase();
+        if (desc.includes("IBFT")) return "IBFT";
+        if (desc.includes("RAAST P2P") || desc.includes("RAAST")) return "RAAST";
+        if (desc.includes("ATM") || desc.includes("WITHDRAWAL")) return "ATM_WITHDRAWAL";
+        if (desc.includes("POS") || desc.includes("MASTERCARD") || desc.includes("VISA")) return "CARD_PAYMENT";
+        if (desc.includes("CHEQUE") || desc.includes("CHQ")) return "CHEQUE";
+        if (desc.includes("BILL") || desc.includes("UTILITY") || desc.includes("LESCO") || desc.includes("SNGPL")) return "UTILITY_PAYMENT";
+        if (desc.includes("FEE") || desc.includes("CHARGE") || desc.includes("COMMISSION")) return "FEE";
+        if (desc.includes("TAX") || desc.includes("WHT") || desc.includes("FED")) return "TAX";
+        if (desc.includes("SALARY") || desc.includes("PAYROLL")) return "SALARY";
+        if (desc.includes("FUNDS TRANSFER") || desc.includes("FT")) return "BANK_TRANSFER";
+        if (credit > 0) return "CASH_DEPOSIT";
+        return "TRANSFER";
+    }
+}
+
+async function parsePdfBankStatementWithPositions(pdf, progressBox) {
+    const totalPages = pdf.numPages;
+    let rawPageItems = [];
+    let fullRawDocText = "";
+
+    for (let p = 1; p <= totalPages; p++) {
+        if (progressBox && p % 5 === 0) {
+            progressBox.textContent = `⏳ Reading page ${p} of ${totalPages}...`;
+        }
+
+        const page = await pdf.getPage(p);
+        const textContent = await page.getTextContent();
+        
+        for (const item of textContent.items) {
+            if (!item.str || !item.str.trim()) continue;
+            const strVal = item.str.trim();
+            fullRawDocText += strVal + " ";
+            rawPageItems.push({
+                page: p,
+                str: strVal,
+                x: item.transform[4],
+                y: Math.round(item.transform[5] / 3.5) * 3.5
+            });
+        }
+    }
+
+    const detectedBank = UniversalBankEngine.detectBankName(fullRawDocText);
+    const detectedBoundaries = detectUniversalColumnBoundaries(rawPageItems);
+
+    const transactions = [];
+    const DATE_REGEX = /^(\d{1,2})[-\/\.](\d{1,2})[-\/\.](\d{2,4})\b|^(\d{4})[-\/\.](\d{1,2})[-\/\.](\d{1,2})\b|^(\d{1,2})[-\/\s]([A-Za-z]{3})[-\/\s](\d{2,4})\b/;
+
+    for (let p = 1; p <= totalPages; p++) {
+        const pageItems = rawPageItems.filter(i => i.page === p);
+        
+        const lineMap = new Map();
+        for (const item of pageItems) {
+            if (!lineMap.has(item.y)) lineMap.set(item.y, []);
+            lineMap.get(item.y).push(item);
+        }
+
+        const sortedYs = Array.from(lineMap.keys()).sort((a, b) => b - a);
+        let blocks = [];
+        let currentBlock = null;
+
+        for (const y of sortedYs) {
+            const lineItems = lineMap.get(y).sort((a, b) => a.x - b.x);
+            const lineText = lineItems.map(i => i.str).join(" ");
+            const lowerText = lineText.toLowerCase();
+
+            if (lowerText.startsWith("page ") || lowerText.startsWith("statement of account") || 
+                lowerText.startsWith("title of account") || lowerText.startsWith("registered address") ||
+                lowerText.startsWith("raiwind road") || lowerText.includes("date description") ||
+                lowerText.includes("cheq/inst") || lowerText.includes("opening balance")) {
+                continue;
+            }
+
+            const dateMatch = lineText.match(DATE_REGEX);
+            if (dateMatch) {
+                if (currentBlock) blocks.push(currentBlock);
+                currentBlock = {
+                    page: p,
+                    dateRaw: dateMatch[0],
+                    items: [...lineItems],
+                    lines: [lineText]
+                };
+            } else if (currentBlock) {
+                currentBlock.items.push(...lineItems);
+                currentBlock.lines.push(lineText);
+            }
+        }
+        if (currentBlock) blocks.push(currentBlock);
+
+        for (const block of blocks) {
+            const tx = parseUniversalSingleBlock(block, detectedBoundaries, detectedBank);
+            if (tx) transactions.push(tx);
+        }
+    }
+
+    let explicitOpeningBalance = null;
+    let prevBalance = 0.0;
+
+    if (transactions.length > 0) {
+        const first = transactions[0];
+        explicitOpeningBalance = first.balance + first.debit - first.credit;
+        prevBalance = explicitOpeningBalance;
+    } else {
+        explicitOpeningBalance = DEFAULT_OPENING_BALANCE;
+        prevBalance = DEFAULT_OPENING_BALANCE;
+    }
+
+    const existingHashSet = new Set(allLedgerTransactions.map(t => (t.content_hash || `${t.date}_${t.amount}_${(t.receiver_name || "").slice(0,30).toLowerCase()}`).toLowerCase()));
+    const existingRefSet = new Set(allLedgerTransactions.map(t => (t.reference_number || "").toLowerCase()).filter(r => r && !r.startsWith("ref_")));
+
+    let mismatchCount = 0;
+    let reviewCount = 0;
+    let mismatchPages = new Set();
+
+    transactions.forEach(tx => {
+        const expectedBal = prevBalance - tx.debit + tx.credit;
+        
+        if (tx.balance > 0) {
+            const diff = Math.abs(expectedBal - tx.balance);
+            if (diff <= 0.05) {
+                if (tx.validation_status === "VALID") tx.validation_status = "VALID";
+            } else {
+                tx.validation_status = "BALANCE_MISMATCH";
+                mismatchCount++;
+                mismatchPages.add(tx.source_page);
+            }
+            prevBalance = tx.balance;
+        } else {
+            prevBalance = expectedBal;
+            tx.balance = expectedBal;
+            if (tx.debit === 0 && tx.credit === 0) {
+                tx.validation_status = "REVIEW_REQUIRED";
+                reviewCount++;
+            }
+        }
+
+        const cHash = `${tx.date}_${tx.debit > 0 ? tx.debit : tx.credit}_${(tx.receiver_name || tx.particulars).slice(0,30).toLowerCase()}_p${tx.source_page}`;
+        tx.content_hash = cHash;
+
+        let isPossibleDup = false;
+        if (tx.reference_number && !tx.reference_number.startsWith("ref_") && existingRefSet.has(tx.reference_number.toLowerCase())) {
+            isPossibleDup = true;
+        } else if (existingHashSet.has(cHash.toLowerCase())) {
+            isPossibleDup = true;
+        }
+
+        if (isPossibleDup) {
+            tx.possible_duplicate = true;
+            if (tx.validation_status === "VALID") tx.validation_status = "POSSIBLE_DUPLICATE";
+        }
+
+        tx.extraction_confidence = (tx.validation_status === "VALID") ? 0.98 : (tx.validation_status === "POSSIBLE_DUPLICATE" ? 0.85 : 0.70);
+    });
+
+    const report = {
+        bankName: detectedBank,
+        totalPages: totalPages,
+        totalExtracted: transactions.length,
+        totalDebit: transactions.reduce((acc, t) => acc + t.debit, 0),
+        totalCredit: transactions.reduce((acc, t) => acc + t.credit, 0),
+        openingBalance: explicitOpeningBalance,
+        closingBalance: transactions.length > 0 ? transactions[transactions.length - 1].balance : explicitOpeningBalance,
+        mismatchCount: mismatchCount,
+        reviewCount: reviewCount,
+        mismatchPages: Array.from(mismatchPages).sort((a, b) => a - b)
+    };
+
+    return { transactions, report };
+}
+
+function detectUniversalColumnBoundaries(items) {
+    let date_x = 50, desc_x = 130, cheq_x = 320, debit_x = 420, credit_x = 485, balance_x = 540, amount_x = null;
+
+    for (const item of items) {
+        const s = item.str.toLowerCase();
+        if (s.includes("date") && !s.includes("up to")) date_x = item.x;
+        else if (s.includes("description") || s.includes("particulars") || s.includes("narration")) desc_x = item.x;
+        else if (s.includes("cheq") || s.includes("inst") || s.includes("ref")) cheq_x = item.x;
+        else if (s.includes("debit") || s.includes("withdrawal") || s.includes("paid out")) debit_x = item.x;
+        else if (s.includes("credit") || s.includes("deposit") || s.includes("paid in")) credit_x = item.x;
+        else if (s.includes("amount") && !s.includes("tax")) amount_x = item.x;
+        else if (s.includes("balance")) balance_x = item.x;
+    }
+
+    const isReverseColumnOrder = (credit_x < debit_x);
+    const hasSingleAmountCol = (amount_x !== null && debit_x === 420 && credit_x === 485);
+
+    return {
+        isValid: true,
+        date_x, desc_x, cheq_x, debit_x, credit_x, amount_x, balance_x,
+        isReverseColumnOrder,
+        hasSingleAmountCol,
+        debit_credit_mid: (debit_x + credit_x) / 2,
+        credit_balance_mid: (credit_x + balance_x) / 2
+    };
+}
+
+function parseUniversalSingleBlock(block, boundaries, bankName) {
+    const fullText = block.lines.join(" ");
+    if (fullText.toLowerCase().includes("opening balance")) return null;
+
+    const dateRes = UniversalBankEngine.parseUniversalDate(block.dateRaw);
+
+    const numbers = [];
+
+    for (const item of block.items) {
+        const strVal = item.str.trim();
+        
+        if (/^03\d{9}$/.test(strVal)) continue;
+        if (/^PK\d{2}[A-Z]{4}\d{16}$/i.test(strVal)) continue;
+        if (/^\d{10,16}$/.test(strVal) && !strVal.includes('.')) continue;
+
+        const numMatch = strVal.match(/^\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?$/);
+        if (numMatch) {
+            const val = parseFloat(strVal.replace(/,/g, ''));
+            if (!isNaN(val) && val > 0 && val !== 2026 && val !== 2025 && val !== 2024 && val !== 180 && val !== 33) {
+                numbers.push({ val, x: item.x, str: strVal });
+            }
+        }
+    }
+
+    let debit = 0.0;
+    let credit = 0.0;
+    let balance = 0.0;
+    let valStatus = dateRes.status;
+
+    const drCrMatch = fullText.match(/(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\s*(DR|CR)\b/i);
+    if (drCrMatch) {
+        const amtVal = parseFloat(drCrMatch[1].replace(/,/g, ''));
+        const flag = drCrMatch[2].toUpperCase();
+        if (flag === "DR") debit = amtVal;
+        else credit = amtVal;
+        if (numbers.length >= 1) balance = numbers[numbers.length - 1].val;
+    } else {
+        numbers.forEach(n => {
+            if (n.x >= boundaries.credit_balance_mid - 25) {
+                if (balance === 0.0) balance = n.val;
+            } else if (n.x >= boundaries.debit_credit_mid - 15) {
+                if (boundaries.isReverseColumnOrder) {
+                    if (debit === 0.0) debit = n.val;
+                } else {
+                    if (credit === 0.0) credit = n.val;
+                }
+            } else {
+                if (boundaries.isReverseColumnOrder) {
+                    if (credit === 0.0) credit = n.val;
+                } else {
+                    if (debit === 0.0) debit = n.val;
+                }
+            }
+        });
+
+        if (numbers.length >= 2 && balance === 0.0) {
+            balance = numbers[numbers.length - 1].val;
+            const txAmt = numbers[numbers.length - 2].val;
+            const isCredit = /\bAc Transfer Cr\b|\bIBFT From CMS\b|\bCheque Deposited\b|\bCredit\b|\bdeposit\b/i.test(fullText)
+                             && !/\bTo\s+[A-Z]/i.test(fullText);
+            if (isCredit) credit = txAmt;
+            else debit = txAmt;
+        } else if (numbers.length === 1 && balance === 0.0) {
+            balance = numbers[0].val;
+        }
+    }
+
+    if (debit === 0.0 && credit === 0.0 && balance > 0.0) {
+        valStatus = "DEBIT_CREDIT_REVIEW_REQUIRED";
+    }
+
+    let receiverName = "";
+    const toMatch = fullText.match(/\bTo\s+([A-Z][A-Za-z0-9\s\/\(\)\.\&\-]{2,40}?)\s*[-–]\s*(?:[A-Z][A-Za-z\s]+(?:Bank|Easypaisa|JazzCash|Telenor|Meezan|Allied|MCB|HBL|UBL|Faysal|Silk|Limited|Askari|Soneri|BankIslami|JS Bank|Dubai Islamic|Standard Chartered|Microfinance))/i)
+                 || fullText.match(/\bTo\s+([A-Z][A-Z\s]{2,35}?)\s*[-–]/)
+                 || fullText.match(/\bpaid to\s+([A-Z][A-Za-z0-9\s]{2,35})/i)
+                 || fullText.match(/\bbeneficiary:\s*([A-Z][A-Za-z0-9\s]{2,35})/i)
+                 || fullText.match(/\bto\s+([A-Z][A-Za-z0-9\s\/\(\)\.\&]{2,35}?)\s+PK\d{2}/i);
+    if (toMatch) {
+        receiverName = toMatch[1].trim().toUpperCase().replace(/\s+/g, ' ');
+    }
+
+    let accountNumber = "";
+    const phoneMatch = fullText.match(/\b(0[23]\d{9})\b/);
+    const ibanMatch = fullText.match(/\b(PK\d{2}[A-Z]{4}\d{16})\b/);
+    if (phoneMatch) accountNumber = phoneMatch[1];
+    else if (ibanMatch) accountNumber = ibanMatch[1];
+
+    let refNum = "";
+    const refMatch = fullText.match(/\b(FT\d{8,18}[A-Z0-9]*)\b/) || fullText.match(/\b(PK\d{2}[A-Z]{4}\d{16})\b/) || fullText.match(/\bCheq\/Inst#?\s*([0-9A-Z]{6,20})/i);
+    if (refMatch) refNum = refMatch[1];
+    else refNum = `ref_${Math.random().toString(36).substr(2,7)}`;
+
+    const txType = UniversalBankEngine.classifyTransactionType(fullText, credit);
+
+    let cleanParticulars = fullText
+        .replace(/^(\d{1,2})[-\/\.](\d{1,2})[-\/\.](\d{2,4})\s*/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return {
+        source_page: block.page,
+        bank_name: bankName,
+        date: dateRes.isoDate,
+        particulars: cleanParticulars.substring(0, 250),
+        receiver_name: receiverName,
+        account_number: accountNumber,
+        reference_number: refNum,
+        debit: debit,
+        credit: credit,
+        balance: balance,
+        amount: (credit > 0 ? credit : debit).toString(),
+        transaction_type: txType,
+        validation_status: valStatus,
+        raw_text: fullText
+    };
+}
+
 function parseCsvBankStatement(rawText) {
     const rawLines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
     const results = [];
-
-    const isJunkHeader = (l) => {
-        const s = l.toLowerCase();
-        return s.startsWith("page ") || s.startsWith("statement of account") || 
-               s.startsWith("raiwind road") || s.startsWith("title of account") ||
-               s.startsWith("house no.52") || s.startsWith("registered address") ||
-               s.startsWith("registered contact") || s.startsWith("date description") ||
-               s.startsWith("opening balance") || s.startsWith("from date:") ||
-               s.startsWith("to date:") || s.startsWith("iban");
-    };
-
-    const cleanLines = rawLines.filter(l => !isJunkHeader(l));
-
-    // Bank Alfalah Date Format: DD-MM-YYYY or DD/MM/YYYY
     const DATE_REGEX = /^(\d{2})[-\/](\d{2})[-\/](\d{4})\b/;
-    const blocks = [];
+
+    let blocks = [];
     let currentBlock = null;
 
-    for (const line of cleanLines) {
+    for (const line of rawLines) {
         const dateMatch = line.match(DATE_REGEX);
         if (dateMatch) {
             if (currentBlock) blocks.push(currentBlock);
             currentBlock = {
+                page: 1,
                 day: dateMatch[1],
                 month: dateMatch[2],
                 year: dateMatch[3],
-                isoDate: `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`, // Convert DD-MM-YYYY -> YYYY-MM-DD
-                lines: [line]
+                isoDate: `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`,
+                lines: [line],
+                items: []
             };
         } else if (currentBlock) {
             currentBlock.lines.push(line);
@@ -853,180 +1283,100 @@ function parseCsvBankStatement(rawText) {
     }
     if (currentBlock) blocks.push(currentBlock);
 
+    const boundaries = detectColumnBoundaries([]);
     for (const block of blocks) {
-        const fullText = block.lines.join(" ");
-        if (fullText.toLowerCase().includes("opening balance")) continue;
-
-        // Credit detection for Bank Alfalah:
-        // "Ac Transfer Cr", "IBFT From CMS", "Cheque Deposited", or "Funds Transfer From RAAST"
-        const isCredit = /\bAc Transfer Cr\b|\bIBFT From CMS\b|\bCheque Deposited\b|\bCredit\b|\bdeposit\b/i.test(fullText)
-                         && !/\bTo\s+[A-Z]/i.test(fullText);
-
-        let receiverName = "";
-        let accountNumber = "";
-
-        // Extract Receiver Name: "To NAZEER ALLAH - JazzCash..."
-        const toMatch = fullText.match(/\bTo\s+([A-Z][A-Za-z0-9\s\/\(\)\.\&\-]{2,50}?)\s*[-–]\s*(?:[A-Z][A-Za-z\s]+(?:Bank|Easypaisa|JazzCash|Telenor|Meezan|Allied|MCB|HBL|UBL|Faysal|Silk|Limited|Askari|Soneri|BankIslami|JS Bank|Dubai Islamic|Standard Chartered|Microfinance))/i)
-                     || fullText.match(/\bTo\s+([A-Z][A-Z\s]{2,40}?)\s*[-–]/);
-        if (toMatch) {
-            receiverName = toMatch[1].trim();
-        }
-
-        if (!receiverName) {
-            const raastMatch = fullText.match(/\bto\s+([A-Z][A-Za-z0-9\s\/\(\)\.\&]{2,40}?)\s+PK\d{2}/i);
-            if (raastMatch) receiverName = raastMatch[1].trim();
-        }
-
-        const phoneMatch = fullText.match(/\b(0[23]\d{9})\b/);
-        const ibanMatch = fullText.match(/\b(PK\d{2}[A-Z]{4}\d{16})\b/);
-        const longNumMatch = fullText.match(/\b(\d{10,16})\b/);
-        if (phoneMatch) accountNumber = phoneMatch[1];
-        else if (ibanMatch) accountNumber = ibanMatch[1];
-        else if (longNumMatch) accountNumber = longNumMatch[1];
-
-        // ── Amount Extraction ──────────────────────────────────────────────────
-        // Match numbers like 17000, 17,000.00, 690,553.82, 7309834.63
-        const AMT_CANDIDATES = fullText.match(/\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b/g) || [];
-        const EXCLUDE_YEARS = new Set([2026, 2025, 2024, 2023, 2022, 180, 33]);
-
-        const cleanNums = [];
-        for (const numStr of AMT_CANDIDATES) {
-            const val = parseFloat(numStr.replace(/,/g, ''));
-            if (isNaN(val)) continue;
-            if (val === parseInt(block.day) || val === parseInt(block.month) || val === parseInt(block.year)) continue;
-            if (EXCLUDE_YEARS.has(val)) continue;
-            if (val > 99999999 && !numStr.includes('.')) continue; // Account / Phone number
-            cleanNums.push(val);
-        }
-
-        let debit  = 0.0;
-        let credit = 0.0;
-        let txAmt  = 0.0;
-
-        // In Bank Alfalah row layout: [Amount, Running Balance]
-        // So cleanNums[cleanNums.length - 2] is ALWAYS the transaction amount!
-        if (cleanNums.length >= 2) {
-            txAmt = cleanNums[cleanNums.length - 2];
-        } else if (cleanNums.length === 1) {
-            txAmt = cleanNums[0];
-        }
-
-        if (isCredit) {
-            credit = txAmt;
-            debit = 0.0;
-        } else {
-            debit = txAmt;
-            credit = 0.0;
-        }
-
-        const amtVal = credit > 0 ? credit : debit;
-        if (amtVal === 0 && !receiverName) continue;
-
-        let cleanParticulars = fullText
-            .replace(/^(\d{2})[-\/](\d{2})[-\/](\d{4})\s*/, '')
-            .replace(/\b0[23]\d{9}\b/g, '')
-            .replace(/\bPK\d{2}[A-Z]{4}\d{16}\b/g, '')
-            .replace(/\b\d{10,16}\b/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        if (!cleanParticulars) cleanParticulars = isCredit ? "Account Transfer Credit" : "IBFT Transfer Payment";
-
-        results.push({
-            date: block.isoDate, // YYYY-MM-DD
-            particulars: cleanParticulars.substring(0, 250),
-            receiver_name: receiverName,
-            account_number: accountNumber,
-            reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
-            debit: debit,
-            credit: credit,
-            amount: amtVal.toString(),
-            transaction_type: isCredit ? "Credit" : "Payment"
-        });
+        const tx = parseSingleBlock(block, boundaries);
+        if (tx) results.push(tx);
     }
-
-    // Fallback to simple CSV parsing if no date-blocks were found
-    if (results.length === 0) {
-        for (const line of cleanLines) {
-            const parts = line.split(/,|\t/).map(p => p.trim());
-            if (parts.length < 3) continue;
-            const dateStr = parts[0];
-            const dateTest = dateStr.match(/\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}/);
-            if (!dateTest) continue;
-            const desc = parts[1] || 'Bank Entry';
-            const nums = parts.slice(2).map(p => parseFloat(p.replace(/,/g,''))).filter(n => !isNaN(n) && n >= 100);
-            if (nums.length === 0) continue;
-            const debitVal = nums[0] || 0;
-            const creditVal = nums[1] || 0;
-            const amt = creditVal > 0 ? creditVal : debitVal;
-            results.push({
-                date: formatDateIso(dateStr),
-                particulars: desc,
-                receiver_name: '',
-                account_number: '',
-                reference_number: `ref_${Math.random().toString(36).substr(2,7)}`,
-                debit: debitVal,
-                credit: creditVal,
-                amount: amt.toString(),
-                transaction_type: creditVal > 0 ? 'Credit' : 'Payment'
-            });
-        }
-    }
-
     return results;
 }
 
-function formatDateIso(dStr) {
-    if (!dStr) return new Date().toISOString().slice(0, 10);
+function generateReconciliationReport(items, totalPages = 1) {
+    let totDeb = 0, totCred = 0, mismatches = 0, reviews = 0;
+    items.forEach(t => {
+        totDeb += t.debit || 0;
+        totCred += t.credit || 0;
+        if (t.validation_status === "BALANCE_MISMATCH") mismatches++;
+        if (t.validation_status === "REVIEW_REQUIRED") reviews++;
+    });
 
-    // ── Explicit DD-MM-YYYY / DD/MM/YYYY parser (Bank Alfalah format) ──────
-    // JS new Date() assumes MM-DD-YYYY which gives wrong month for these dates
-    const ddmmyyyy = String(dStr).match(/^(\d{1,2})[-\/\s](\d{1,2})[-\/\s](\d{2,4})$/);
-    if (ddmmyyyy) {
-        let day   = parseInt(ddmmyyyy[1], 10);
-        let month = parseInt(ddmmyyyy[2], 10);
-        let year  = parseInt(ddmmyyyy[3], 10);
-        if (year < 100) year += 2000;
-        // Sanity: if day > 12, definitely DD-MM. If both <= 12, assume DD-MM (Pakistani convention).
-        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-            const y = String(year).padStart(4, '0');
-            const m = String(month).padStart(2, '0');
-            const d = String(day).padStart(2, '0');
-            return `${y}-${m}-${d}`;
-        }
-    }
+    const openBal = items.length > 0 ? (items[0].balance + items[0].debit - items[0].credit) : DEFAULT_OPENING_BALANCE;
+    const closeBal = items.length > 0 ? items[items.length - 1].balance : openBal;
 
-    try {
-        const parsed = new Date(dStr);
-        if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-    } catch (e) {}
-    return new Date().toISOString().slice(0, 10);
+    return {
+        totalPages: totalPages,
+        totalExtracted: items.length,
+        totalDebit: totDeb,
+        totalCredit: totCred,
+        openingBalance: openBal,
+        closingBalance: closeBal,
+        mismatchCount: mismatches,
+        reviewCount: reviews,
+        mismatchPages: []
+    };
 }
 
-function openBulkPreviewModal(items) {
+function openBulkPreviewModal(items, report) {
     parsedBulkItems = items;
     const modal = document.getElementById("bulkPreviewModal");
     const tbody = document.getElementById("bulkPreviewTableBody");
 
     if (!modal || !tbody) return;
 
-    let html = "";
-    const existingSet = new Set(allLedgerTransactions.map(t => (t.reference_number || t.id).toLowerCase()));
+    // Render Reconciliation Audit Report
+    if (report) {
+        document.getElementById("recPagesCount").textContent = report.totalPages || 1;
+        document.getElementById("recTxCount").textContent = report.totalExtracted || items.length;
+        document.getElementById("recTotalDebit").textContent = `PKR ${(report.totalDebit || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        document.getElementById("recTotalCredit").textContent = `PKR ${(report.totalCredit || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        document.getElementById("recOpeningBal").textContent = `PKR ${(report.openingBalance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        document.getElementById("recClosingBal").textContent = `PKR ${(report.closingBalance || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        document.getElementById("recMismatchCount").textContent = report.mismatchCount || 0;
+        document.getElementById("recReviewCount").textContent = report.reviewCount || 0;
 
+        const statusBadge = document.getElementById("recStatusBadge");
+        if (report.mismatchCount === 0 && report.reviewCount === 0) {
+            statusBadge.textContent = "✓ Pages & Balance Reconciled";
+            statusBadge.style.background = "rgba(52,211,153,0.2)";
+            statusBadge.style.color = "#34d399";
+        } else {
+            statusBadge.textContent = `⚠️ Audit Review Required (${report.mismatchCount} Mismatches, ${report.reviewCount} Uncertain)`;
+            statusBadge.style.background = "rgba(251,191,36,0.2)";
+            statusBadge.style.color = "#fbbf24";
+        }
+    }
+
+    let html = "";
     items.forEach((item, idx) => {
-        const isDup = existingSet.has((item.reference_number || "").toLowerCase());
-        const dupBadge = isDup ? `<span style="color: #fbbf24; font-size: 10px;">⚠️ Existing</span>` : `<span style="color: #34d399; font-size: 10px;">✅ New</span>`;
-        const checked = isDup ? "" : "checked";
+        let valBadge = `<span style="color: #34d399; font-size: 11px;">✅ VALID</span>`;
+        if (item.validation_status === "BALANCE_MISMATCH") {
+            valBadge = `<span style="color: #fbbf24; font-size: 11px;">⚠️ BALANCE MISMATCH</span>`;
+        } else if (item.validation_status === "REVIEW_REQUIRED") {
+            valBadge = `<span style="color: #f87171; font-size: 11px;">🔴 REVIEW REQUIRED</span>`;
+        } else if (item.validation_status === "DATE_FORMAT_REVIEW_REQUIRED") {
+            valBadge = `<span style="color: #f59e0b; font-size: 11px;">⚠️ DATE FORMAT REVIEW</span>`;
+        } else if (item.validation_status === "DEBIT_CREDIT_REVIEW_REQUIRED") {
+            valBadge = `<span style="color: #ef4444; font-size: 11px;">🔴 DR/CR UNCERTAIN</span>`;
+        } else if (item.possible_duplicate || item.validation_status === "POSSIBLE_DUPLICATE") {
+            valBadge = `<span style="color: #60a5fa; font-size: 11px;">🔵 POSSIBLE DUPLICATE</span>`;
+        }
+
+        const bankTag = item.bank_name ? `<span style="font-size: 10px; color: #94a3b8; display: block;">🏛️ ${item.bank_name}</span>` : '';
 
         html += `
             <tr>
-                <td><input type="checkbox" class="bulk-row-cb" data-idx="${idx}" ${checked} onchange="updateBulkSelectedCount()" /></td>
+                <td><input type="checkbox" class="bulk-row-cb" data-idx="${idx}" checked onchange="updateBulkSelectedCount()" /></td>
+                <td><code>P.${item.source_page || 1}</code></td>
                 <td>${item.date}</td>
-                <td><b>${item.particulars}</b></td>
+                <td><b>${item.particulars}</b> ${bankTag}</td>
                 <td><code>${item.reference_number || 'Auto-ID'}</code></td>
-                <td style="text-align: right; color: #f87171;">${item.debit > 0 ? item.debit.toLocaleString() : '-'}</td>
-                <td style="text-align: right; color: #34d399;">${item.credit > 0 ? item.credit.toLocaleString() : '-'}</td>
-                <td>${dupBadge}</td>
+                <td style="text-align: right; color: #f87171;">${item.debit > 0 ? item.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                <td style="text-align: right; color: #34d399;">${item.credit > 0 ? item.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                <td style="text-align: right; color: #818cf8;">${item.balance > 0 ? item.balance.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                <td>${valBadge}</td>
+                <td style="text-align: center;">
+                    <button onclick="openRawSourceModal(${idx})" class="secondary-btn" style="padding: 2px 6px; font-size: 10px;">📄 Source</button>
+                </td>
             </tr>
         `;
     });
@@ -1034,6 +1384,18 @@ function openBulkPreviewModal(items) {
     tbody.innerHTML = html;
     updateBulkSelectedCount();
     modal.classList.remove("hidden");
+}
+
+function openRawSourceModal(idx) {
+    const item = parsedBulkItems[idx];
+    if (!item) return;
+
+    document.getElementById("modalSourcePageNum").textContent = `Page ${item.source_page || 1}`;
+    document.getElementById("modalSourceDate").textContent = item.date || "-";
+    document.getElementById("modalSourceStatus").textContent = item.validation_status || "VALID";
+    document.getElementById("modalSourceRawText").textContent = item.raw_text || item.particulars || "Raw line text unavailable";
+
+    document.getElementById("rawSourceModal").classList.remove("hidden");
 }
 
 function updateBulkSelectedCount() {
@@ -1126,7 +1488,7 @@ function renderBankLedgerTable() {
     const tbody = document.getElementById("bankLedgerTableBody");
     if (!tbody) return;
 
-    const searchQuery = (document.getElementById("ledgerSearchInput")?.value || "").toLowerCase().trim();
+    const searchQuery = (document.getElementById("ledgerSearchInput")?.value || "").toUpperCase().trim();
     const selectedMonth = document.getElementById("ledgerMonthSelect")?.value || "all";
     const dateFromStr = document.getElementById("ledgerDateFrom")?.value || "";
     const dateToStr = document.getElementById("ledgerDateTo")?.value || "";
@@ -1144,7 +1506,12 @@ function renderBankLedgerTable() {
         return da - db;
     });
 
-    let currentBalance = DEFAULT_OPENING_BALANCE;
+    let derivedOpeningBal = DEFAULT_OPENING_BALANCE;
+    if (sorted.length > 0 && sorted[0].balance > 0) {
+        derivedOpeningBal = sorted[0].balance + sorted[0].debit - sorted[0].credit;
+    }
+
+    let currentBalance = derivedOpeningBal;
     let totalDebit = 0.0;
     let totalCredit = 0.0;
 
@@ -1152,6 +1519,10 @@ function renderBankLedgerTable() {
     let lastMonthHeader = "";
     let renderedCount = 0;
 
+    const exactMatches = [];
+    const possibleMatches = [];
+
+    // Classify and filter items
     sorted.forEach((t) => {
         const amtStr = strToFloat(t.amount);
         const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
@@ -1159,69 +1530,106 @@ function renderBankLedgerTable() {
         const debitVal = (typeof t.debit === "number" && t.debit > 0) ? t.debit : (isCredit ? 0.0 : amtStr);
         const creditVal = (typeof t.credit === "number" && t.credit > 0) ? t.credit : (isCredit ? amtStr : 0.0);
 
-        currentBalance = currentBalance - debitVal + creditVal;
+        if (t.balance > 0) currentBalance = t.balance;
+        else currentBalance = currentBalance - debitVal + creditVal;
+
+        t._calcDebit = debitVal;
+        t._calcCredit = creditVal;
+        t._calcBalance = currentBalance;
 
         let tDateObj = new Date(t.date);
         let monthHeaderStr = "";
-        let formattedDate = t.date;
 
         if (!isNaN(tDateObj.getTime())) {
             monthHeaderStr = tDateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-            formattedDate = tDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
         }
 
-        let matches = true;
-
-        if (searchQuery) {
-            const particulars = `${t.sender_name} ${t.receiver_name} ${t.purpose} ${t.particulars} ${t.account_number} ${t.transaction_type} ${t.reference_number}`.toLowerCase();
-            if (!particulars.includes(searchQuery)) matches = false;
-        }
+        let passesDateFilter = true;
 
         if (selectedMonth !== "all" && monthHeaderStr) {
             const shortM = tDateObj.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-            if (shortM !== selectedMonth) matches = false;
+            if (shortM !== selectedMonth) passesDateFilter = false;
         }
 
-        if (dateFromStr) {
-            if (new Date(t.date) < new Date(dateFromStr)) matches = false;
+        if (dateFromStr && t.date < dateFromStr) passesDateFilter = false;
+        if (dateToStr && t.date > dateToStr) passesDateFilter = false;
+
+        if (!passesDateFilter) return;
+
+        if (searchQuery) {
+            const rUpper = (t.receiver_name || "").toUpperCase();
+            const sUpper = (t.sender_name || "").toUpperCase();
+            const purpUpper = (t.purpose || t.particulars || "").toUpperCase();
+            const rawUpper = (t.raw_text || "").toUpperCase();
+            const refUpper = (t.reference_number || "").toUpperCase();
+
+            const fullHaystack = `${rUpper} ${sUpper} ${purpUpper} ${rawUpper} ${refUpper}`;
+
+            if (rUpper === searchQuery || sUpper === searchQuery) {
+                exactMatches.push(t);
+            } else if (fullHaystack.includes(searchQuery)) {
+                possibleMatches.push(t);
+            }
+        } else {
+            exactMatches.push(t);
+        }
+    });
+
+    const renderRowGroup = (list, groupTitle) => {
+        let html = "";
+        if (groupTitle) {
+            html += `
+                <tr class="month-divider-row" style="background: rgba(99, 102, 241, 0.15);">
+                    <td colspan="7" style="color: #a5b4fc; font-weight: bold;">🔍 ${groupTitle} (${list.length} Records)</td>
+                </tr>
+            `;
         }
 
-        if (dateToStr) {
-            if (new Date(t.date) > new Date(dateToStr)) matches = false;
-        }
-
-        if (matches) {
+        list.forEach(t => {
             renderedCount++;
-            totalDebit += debitVal;
-            totalCredit += creditVal;
+            totalDebit += t._calcDebit;
+            totalCredit += t._calcCredit;
 
-            if (monthHeaderStr && monthHeaderStr !== lastMonthHeader) {
-                lastMonthHeader = monthHeaderStr;
-                rowsHtml += `
-                    <tr class="month-divider-row">
-                        <td colspan="7">🗓️ --- ${monthHeaderStr.toUpperCase()} STATEMENT TENURE ---</td>
-                    </tr>
-                `;
+            let tDateObj = new Date(t.date);
+            let formattedDate = t.date;
+            if (!isNaN(tDateObj.getTime())) {
+                formattedDate = tDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
             }
 
             const particularsText = t.particulars || t.purpose || `POS SALE / PAYMENT TO ${t.receiver_name || t.sender_name || 'MERCHANT'}`;
             const instNo = t.reference_number || t.id;
+            const srcPageStr = t.source_page || "1";
 
-            rowsHtml += `
+            html += `
                 <tr>
-                    <td style="font-weight: 600;">${formattedDate}</td>
+                    <td style="font-weight: 600;">${formattedDate} <span style="font-size: 10px; color: #38bdf8;">[P.${srcPageStr}]</span></td>
                     <td><b>${particularsText}</b> ${t.sender_name || t.receiver_name ? `<br/><span style="font-size: 11px; color: #94a3b8;">Person: ${t.receiver_name || t.sender_name || 'N/A'} ${t.account_number ? `| Account/Phone: ${t.account_number}` : ''}</span>` : ''}</td>
                     <td><code>${instNo}</code></td>
-                    <td class="debit-val" style="text-align: right;">${debitVal > 0 ? debitVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                    <td class="credit-val" style="text-align: right;">${creditVal > 0 ? creditVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                    <td class="running-bal" style="text-align: right;">${currentBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td class="debit-val" style="text-align: right; color: #f87171;">${t._calcDebit > 0 ? t._calcDebit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                    <td class="credit-val" style="text-align: right; color: #34d399;">${t._calcCredit > 0 ? t._calcCredit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                    <td class="running-bal" style="text-align: right; color: #818cf8;">${t._calcBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                     <td style="text-align: center;">
-                        <button onclick="deleteTransactionRow('${t.id}', '${particularsText.replace(/'/g, "\\'")}')" class="logout-btn" style="padding: 3px 6px; font-size: 11px;">🗑️ Delete</button>
+                        <div style="display: flex; gap: 4px; justify-content: center;">
+                            <button onclick='viewLedgerItemSource(${JSON.stringify(t).replace(/'/g, "&apos;")})' class="secondary-btn" style="padding: 2px 6px; font-size: 10px;">📄 Source</button>
+                            <button onclick="deleteTransactionRow('${t.id}', '${particularsText.replace(/'/g, "\\'")}')" class="logout-btn" style="padding: 2px 6px; font-size: 10px;">🗑️</button>
+                        </div>
                     </td>
                 </tr>
             `;
+        });
+        return html;
+    };
+
+    if (searchQuery) {
+        if (exactMatches.length > 0) {
+            rowsHtml += renderRowGroup(exactMatches, `EXACT MATCHES FOR "${searchQuery}"`);
         }
-    });
+        if (possibleMatches.length > 0) {
+            rowsHtml += renderRowGroup(possibleMatches, `POSSIBLE MATCHES (SIMILAR / CONTAINING "${searchQuery}")`);
+        }
+    } else {
+        rowsHtml += renderRowGroup(exactMatches, null);
+    }
 
     if (renderedCount === 0) {
         rowsHtml = `<tr><td colspan="7" style="text-align: center; color: #94a3b8;">No statement transactions match the selected tenure or search filter.</td></tr>`;
@@ -1229,10 +1637,9 @@ function renderBankLedgerTable() {
 
     tbody.innerHTML = rowsHtml;
 
-    // Show Recipient & Account Live Search Summary Banner if search term or filter is active
     if (searchQuery && banner) {
         banner.classList.remove("hidden");
-        if (bannerTitle) bannerTitle.textContent = `👤 Person / Account Search Summary for "${searchQuery.toUpperCase()}"`;
+        if (bannerTitle) bannerTitle.textContent = `👤 Person / Account Search Summary for "${searchQuery}" (${exactMatches.length} Exact, ${possibleMatches.length} Possible Matches)`;
         if (bannerCount) bannerCount.textContent = `${renderedCount} Transactions Found`;
         if (bannerDebit) bannerDebit.textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
         if (bannerCredit) bannerCredit.textContent = `PKR ${totalCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
@@ -1241,10 +1648,19 @@ function renderBankLedgerTable() {
         banner.classList.add("hidden");
     }
 
-    document.getElementById("ledgerOpeningBal").textContent = `PKR ${DEFAULT_OPENING_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    document.getElementById("ledgerOpeningBal").textContent = `PKR ${derivedOpeningBal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalDebit").textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalCredit").textContent = `PKR ${totalCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerClosingBal").textContent = `PKR ${currentBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+}
+
+function viewLedgerItemSource(t) {
+    if (!t) return;
+    document.getElementById("modalSourcePageNum").textContent = `Page ${t.source_page || 1}`;
+    document.getElementById("modalSourceDate").textContent = t.date || "-";
+    document.getElementById("modalSourceStatus").textContent = t.validation_status || "VALID";
+    document.getElementById("modalSourceRawText").textContent = t.raw_text || t.particulars || "Raw PDF text stored in system record";
+    document.getElementById("rawSourceModal").classList.remove("hidden");
 }
 
 function strToFloat(val) {

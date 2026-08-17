@@ -470,10 +470,9 @@ function initAdminFormEvents() {
     const wipeBtn = document.getElementById("wipeAllDataBtn");
     if (wipeBtn) {
         wipeBtn.onclick = async () => {
-            if (!confirm("⚠️ WARNING: This will permanently delete ALL transaction records from Google Sheets. This cannot be undone. Are you absolutely sure?")) return;
-            if (!confirm("Last chance — click OK to permanently wipe ALL data.")) return;
+            if (!confirm("Are you sure you want to delete all imported bank statement transactions? This cannot be undone.")) return;
             wipeBtn.disabled = true;
-            wipeBtn.textContent = "⏳ Wiping...";
+            wipeBtn.textContent = "⏳ Deleting...";
             try {
                 const res = await fetch("/api/cleanup-statement-dumps", {
                     method: "POST",
@@ -481,16 +480,16 @@ function initAdminFormEvents() {
                     body: JSON.stringify({ wipe_all: true })
                 });
                 const data = await res.json();
-                alert(`✅ ${data.message}`);
+                alert(`✅ ${data.message || "All transaction records deleted."}`);
                 allLedgerTransactions = [];
-                fetchAdminTransactions();
-                loadBankLedgerStatement();
-                fetchDashboardStats();
+                await fetchAdminTransactions();
+                await loadBankLedgerStatement(true);
+                await fetchDashboardStats();
             } catch (err) {
-                alert("Wipe error: " + err.message);
+                alert("Delete error: " + err.message);
             } finally {
                 wipeBtn.disabled = false;
-                wipeBtn.textContent = "🗑️ Wipe ALL Data";
+                wipeBtn.textContent = "🗑️ Clear All Transactions";
             }
         };
     }
@@ -612,8 +611,8 @@ function getStatusPill(st) {
 // -------------------------------------------------------------
 // 5. CONTINUOUS BANK LEDGER STATEMENT & BULK UPLOADER CONTROLLER
 // -------------------------------------------------------------
-async function loadBankLedgerStatement() {
-    if (allLedgerTransactions.length === 0) {
+async function loadBankLedgerStatement(forceReload = false) {
+    if (forceReload || allLedgerTransactions.length === 0) {
         try {
             const res = await fetch("/api/transactions?role=admin");
             if (res.ok) {
@@ -1462,6 +1461,55 @@ async function confirmBulkImport() {
     }
 }
 
+function parseIsoDateParts(dateStr) {
+    if (!dateStr) return { year: 2026, month: 1, day: 1 };
+    const clean = String(dateStr).trim().split('T')[0];
+    const parts = clean.split(/[-\/\.]/);
+    if (parts.length === 3) {
+        if (parts[0].length === 4) {
+            return {
+                year: parseInt(parts[0], 10),
+                month: parseInt(parts[1], 10),
+                day: parseInt(parts[2], 10)
+            };
+        } else if (parts[2].length === 4) {
+            return {
+                year: parseInt(parts[2], 10),
+                month: parseInt(parts[1], 10),
+                day: parseInt(parts[0], 10)
+            };
+        }
+    }
+    return { year: 2026, month: 1, day: 1 };
+}
+
+function getMonthYearFullLabel(dateStr) {
+    const { year, month } = parseIsoDateParts(dateStr);
+    const fullMonths = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const mName = fullMonths[Math.max(0, Math.min(11, month - 1))];
+    return `${mName} ${year}`;
+}
+
+function getMonthYearShortLabel(dateStr) {
+    const { year, month } = parseIsoDateParts(dateStr);
+    const shortMonths = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const mName = shortMonths[Math.max(0, Math.min(11, month - 1))];
+    return `${mName} ${year}`;
+}
+
+function getTimestampFromDateAndTime(dateStr, timeStr) {
+    const { year, month, day } = parseIsoDateParts(dateStr);
+    let hh = 0, mm = 0;
+    if (timeStr) {
+        const tm = String(timeStr).match(/(\d{1,2}):(\d{2})/);
+        if (tm) {
+            hh = parseInt(tm[1], 10);
+            mm = parseInt(tm[2], 10);
+        }
+    }
+    return new Date(year, month - 1, day, hh, mm).getTime();
+}
+
 function populateMonthTenureSelect() {
     const monthSelect = document.getElementById("ledgerMonthSelect");
     if (!monthSelect) return;
@@ -1469,13 +1517,8 @@ function populateMonthTenureSelect() {
     const monthsSet = new Set();
     allLedgerTransactions.forEach(t => {
         if (t.date) {
-            try {
-                const d = new Date(t.date);
-                if (!isNaN(d.getTime())) {
-                    const mName = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-                    monthsSet.add(mName);
-                }
-            } catch (e) {}
+            const mName = getMonthYearShortLabel(t.date);
+            monthsSet.add(mName);
         }
     });
 
@@ -1503,9 +1546,9 @@ function renderBankLedgerTable() {
     const bannerNet = document.getElementById("searchSummaryNet");
 
     const sorted = [...allLedgerTransactions].sort((a, b) => {
-        const da = new Date(a.date + " " + (a.time || "00:00"));
-        const db = new Date(b.date + " " + (b.time || "00:00"));
-        return da - db;
+        const ta = getTimestampFromDateAndTime(a.date, a.time);
+        const tb = getTimestampFromDateAndTime(b.date, b.time);
+        return ta - tb;
     });
 
     let derivedOpeningBal = DEFAULT_OPENING_BALANCE;
@@ -1539,19 +1582,12 @@ function renderBankLedgerTable() {
         t._calcCredit = creditVal;
         t._calcBalance = currentBalance;
 
-        let tDateObj = new Date(t.date);
-        let monthHeaderStr = "";
-
-        if (!isNaN(tDateObj.getTime())) {
-            monthHeaderStr = tDateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-        }
+        const monthHeaderStr = getMonthYearFullLabel(t.date);
+        const shortM = getMonthYearShortLabel(t.date);
 
         let passesDateFilter = true;
 
-        if (selectedMonth !== "all" && monthHeaderStr) {
-            const shortM = tDateObj.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-            if (shortM !== selectedMonth) passesDateFilter = false;
-        }
+        if (selectedMonth !== "all" && shortM !== selectedMonth) passesDateFilter = false;
 
         if (dateFromStr && t.date < dateFromStr) passesDateFilter = false;
         if (dateToStr && t.date > dateToStr) passesDateFilter = false;

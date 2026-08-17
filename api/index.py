@@ -620,15 +620,22 @@ def app(environ, start_response):
             ws_tx, ws_users, sid = get_google_sheet_tabs()
             rows = ws_tx.get_all_values()
 
+            tx_headers = [
+                "reference_number", "date", "time", "amount", "currency", 
+                "sender_name", "sender_account", "receiver_name", "receiver_account", 
+                "purpose", "transaction_type", "images_json", "logged_by", 
+                "status", "progress_pct", "employee_id", "id", "debit", "credit",
+                "source_page", "balance", "validation_status", "raw_text", 
+                "statement_id", "pdf_filename", "possible_duplicate", "content_hash"
+            ]
+
             deleted_count = 0
             if wipe_all:
-                # Nuke ALL transaction rows except the header row
-                if len(rows) > 1:
-                    for idx in range(len(rows), 1, -1):
-                        ws_tx.delete_row(idx)
-                        deleted_count += 1
+                deleted_count = max(0, len(rows) - 1)
+                header_row = rows[0] if (len(rows) > 0 and len(rows[0]) > 0) else tx_headers
+                ws_tx.clear()
+                ws_tx.append_row(header_row)
             else:
-                # Delete junk/dump rows or rows with 0 amount
                 JUNK_PATTERNS = [
                     "statement of account", "page of date description", "raiwind road branch",
                     "cheq/inst", "date description", "opening balance", "closing balance",
@@ -636,10 +643,10 @@ def app(environ, start_response):
                 ]
                 JUNK_AMOUNTS = ["33", "180", "2026", "2025", "2024", "1", "0", "0.0", "0.00"]
 
-                for idx in range(len(rows), 1, -1):
-                    r = rows[idx - 1]
+                keep_rows = [rows[0]] if len(rows) > 0 else [tx_headers]
+                for idx in range(1, len(rows)):
+                    r = rows[idx]
                     if not r or len(r) == 0:
-                        ws_tx.delete_row(idx)
                         deleted_count += 1
                         continue
                     full_str = " ".join([str(x) for x in r]).lower()
@@ -656,11 +663,16 @@ def app(environ, start_response):
                         or amt_val == 0.0
                     )
                     if is_junk:
-                        ws_tx.delete_row(idx)
                         deleted_count += 1
+                    else:
+                        keep_rows.append(r)
+
+                if deleted_count > 0:
+                    ws_tx.clear()
+                    ws_tx.append_rows(keep_rows)
 
             status, headers, res = _json(200, {
-                "message": f"Cleaned up {deleted_count} rows {'(ALL transactions wiped)' if wipe_all else '(junk & zero-amount rows removed)'}.",
+                "message": f"Successfully deleted {deleted_count} transaction records.",
                 "deleted_count": deleted_count
             })
             start_response(status, headers)

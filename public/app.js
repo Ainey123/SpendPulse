@@ -1364,6 +1364,10 @@ function openBulkPreviewModal(items, report) {
 
         const bankTag = item.bank_name ? `<span style="font-size: 10px; color: #94a3b8; display: block;">🏛️ ${item.bank_name}</span>` : '';
 
+        const dVal = strToFloat(item.debit);
+        const cVal = strToFloat(item.credit);
+        const bVal = strToFloat(item.balance);
+
         html += `
             <tr>
                 <td><input type="checkbox" class="bulk-row-cb" data-idx="${idx}" checked onchange="updateBulkSelectedCount()" /></td>
@@ -1371,9 +1375,9 @@ function openBulkPreviewModal(items, report) {
                 <td>${item.date}</td>
                 <td><b>${item.particulars}</b> ${bankTag}</td>
                 <td><code>${item.reference_number || 'Auto-ID'}</code></td>
-                <td style="text-align: right; color: #f87171;">${item.debit > 0 ? item.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                <td style="text-align: right; color: #34d399;">${item.credit > 0 ? item.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
-                <td style="text-align: right; color: #818cf8;">${item.balance > 0 ? item.balance.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                <td style="text-align: right; color: #f87171;">${dVal > 0 ? dVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                <td style="text-align: right; color: #34d399;">${cVal > 0 ? cVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
+                <td style="text-align: right; color: #818cf8;">${bVal > 0 ? bVal.toLocaleString(undefined, {minimumFractionDigits: 2}) : '-'}</td>
                 <td>${valBadge}</td>
                 <td style="text-align: center;">
                     <button onclick="openRawSourceModal(${idx})" class="secondary-btn" style="padding: 2px 6px; font-size: 10px;">📄 Source</button>
@@ -1569,13 +1573,16 @@ function renderBankLedgerTable() {
 
     // Classify and filter items
     sorted.forEach((t) => {
-        const amtStr = strToFloat(t.amount);
+        const dVal = strToFloat(t.debit);
+        const cVal = strToFloat(t.credit);
+        const aVal = strToFloat(t.amount);
+        const bVal = strToFloat(t.balance);
         const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
         
-        const debitVal = (typeof t.debit === "number" && t.debit > 0) ? t.debit : (isCredit ? 0.0 : amtStr);
-        const creditVal = (typeof t.credit === "number" && t.credit > 0) ? t.credit : (isCredit ? amtStr : 0.0);
+        const debitVal = dVal > 0 ? dVal : (!isCredit && aVal > 0 ? aVal : 0.0);
+        const creditVal = cVal > 0 ? cVal : (isCredit && aVal > 0 ? aVal : 0.0);
 
-        if (t.balance > 0) currentBalance = t.balance;
+        if (bVal > 0) currentBalance = bVal;
         else currentBalance = currentBalance - debitVal + creditVal;
 
         t._calcDebit = debitVal;
@@ -1730,19 +1737,25 @@ function exportLedgerToCsv() {
     let curBal = DEFAULT_OPENING_BALANCE;
 
     const sorted = [...allLedgerTransactions].sort((a, b) => {
-        const da = new Date(a.date + " " + (a.time || "00:00"));
-        const db = new Date(b.date + " " + (b.time || "00:00"));
-        return da - db;
+        const ta = getTimestampFromDateAndTime(a.date, a.time);
+        const tb = getTimestampFromDateAndTime(b.date, b.time);
+        return ta - tb;
     });
 
     sorted.forEach(t => {
-        const amtStr = strToFloat(t.amount);
+        const dVal = strToFloat(t.debit);
+        const cVal = strToFloat(t.credit);
+        const aVal = strToFloat(t.amount);
+        const bVal = strToFloat(t.balance);
         const isCredit = (t.transaction_type || "").toLowerCase().includes("credit") || (t.transaction_type || "").toLowerCase().includes("deposit");
-        const debitVal = isCredit ? 0.0 : amtStr;
-        const creditVal = isCredit ? amtStr : 0.0;
-        curBal = curBal - debitVal + creditVal;
+        
+        const debitVal = dVal > 0 ? dVal : (!isCredit && aVal > 0 ? aVal : 0.0);
+        const creditVal = cVal > 0 ? cVal : (isCredit && aVal > 0 ? aVal : 0.0);
 
-        const particulars = `"${(t.purpose || t.receiver_name || 'POS Sale').replace(/"/g, '""')}"`;
+        if (bVal > 0) curBal = bVal;
+        else curBal = curBal - debitVal + creditVal;
+
+        const particulars = `"${(t.purpose || t.receiver_name || t.particulars || 'POS Sale').replace(/"/g, '""')}"`;
         const ref = `"${(t.reference_number || t.id).replace(/"/g, '""')}"`;
 
         csvContent += `${t.date},${particulars},${ref},${debitVal},${creditVal},${curBal}\n`;

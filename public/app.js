@@ -16,6 +16,8 @@ let selectedTxId = null;
 let allLedgerTransactions = [];
 const DEFAULT_OPENING_BALANCE = 1000000.00;
 let parsedBulkItems = [];
+let currentReport = null;
+let selectedFileName = "";
 
 // Initialize App
 document.addEventListener("DOMContentLoaded", () => {
@@ -775,6 +777,7 @@ async function handleBulkStatementFile(file) {
         progressBox.classList.remove("hidden");
     }
 
+    selectedFileName = file.name;
     const name = file.name.toLowerCase();
     const isPdf = name.endsWith(".pdf") || file.type === "application/pdf";
 
@@ -1052,8 +1055,7 @@ async function parsePdfBankStatementWithPositions(pdf, progressBox) {
         prevBalance = DEFAULT_OPENING_BALANCE;
     }
 
-    const existingHashSet = new Set(allLedgerTransactions.map(t => (t.content_hash || `${t.date}_${t.amount}_${(t.receiver_name || "").slice(0,30).toLowerCase()}`).toLowerCase()));
-    const existingRefSet = new Set(allLedgerTransactions.map(t => (t.reference_number || "").toLowerCase()).filter(r => r && !r.startsWith("ref_")));
+    const existingFps = new Set(allLedgerTransactions.map(t => makeTxFingerprint(t.date, t.particulars || t.purpose, t.debit, t.credit, t.reference_number, t.balance)));
 
     let mismatchCount = 0;
     let reviewCount = 0;
@@ -1081,22 +1083,16 @@ async function parsePdfBankStatementWithPositions(pdf, progressBox) {
             }
         }
 
-        const cHash = `${tx.date}_${tx.debit > 0 ? tx.debit : tx.credit}_${(tx.receiver_name || tx.particulars).slice(0,30).toLowerCase()}_p${tx.source_page}`;
-        tx.content_hash = cHash;
+        const fp = makeTxFingerprint(tx.date, tx.particulars, tx.debit, tx.credit, tx.reference_number, tx.balance);
+        tx.content_hash = fp;
 
-        let isPossibleDup = false;
-        if (tx.reference_number && !tx.reference_number.startsWith("ref_") && existingRefSet.has(tx.reference_number.toLowerCase())) {
-            isPossibleDup = true;
-        } else if (existingHashSet.has(cHash.toLowerCase())) {
-            isPossibleDup = true;
-        }
-
-        if (isPossibleDup) {
+        if (existingFps.has(fp)) {
             tx.possible_duplicate = true;
-            if (tx.validation_status === "VALID") tx.validation_status = "POSSIBLE_DUPLICATE";
+            tx.is_duplicate = true;
+            tx.validation_status = "SKIPPED_DUPLICATE";
         }
 
-        tx.extraction_confidence = (tx.validation_status === "VALID") ? 0.98 : (tx.validation_status === "POSSIBLE_DUPLICATE" ? 0.85 : 0.70);
+        tx.extraction_confidence = (tx.validation_status === "VALID") ? 0.98 : (tx.validation_status === "SKIPPED_DUPLICATE" ? 0.99 : 0.70);
     });
 
     const report = {
@@ -1324,6 +1320,7 @@ function generateReconciliationReport(items, totalPages = 1) {
 
 function openBulkPreviewModal(items, report) {
     parsedBulkItems = items;
+    currentReport = report;
     const modal = document.getElementById("bulkPreviewModal");
     const tbody = document.getElementById("bulkPreviewTableBody");
 
@@ -1355,7 +1352,9 @@ function openBulkPreviewModal(items, report) {
     let html = "";
     items.forEach((item, idx) => {
         let valBadge = `<span style="color: #34d399; font-size: 11px;">✅ VALID</span>`;
-        if (item.validation_status === "BALANCE_MISMATCH") {
+        if (item.validation_status === "SKIPPED_DUPLICATE" || item.is_duplicate) {
+            valBadge = `<span style="color: #60a5fa; font-size: 11px;">🔵 DUPLICATE (WILL SKIP)</span>`;
+        } else if (item.validation_status === "BALANCE_MISMATCH") {
             valBadge = `<span style="color: #fbbf24; font-size: 11px;">⚠️ BALANCE MISMATCH</span>`;
         } else if (item.validation_status === "REVIEW_REQUIRED") {
             valBadge = `<span style="color: #f87171; font-size: 11px;">🔴 REVIEW REQUIRED</span>`;
@@ -1373,9 +1372,11 @@ function openBulkPreviewModal(items, report) {
         const cVal = strToFloat(item.credit);
         const bVal = strToFloat(item.balance);
 
+        const isDup = item.validation_status === "SKIPPED_DUPLICATE" || item.is_duplicate;
+
         html += `
             <tr>
-                <td><input type="checkbox" class="bulk-row-cb" data-idx="${idx}" checked onchange="updateBulkSelectedCount()" /></td>
+                <td><input type="checkbox" class="bulk-row-cb" data-idx="${idx}" ${isDup ? '' : 'checked'} onchange="updateBulkSelectedCount()" /></td>
                 <td><code>P.${item.source_page || 1}</code></td>
                 <td>${item.date}</td>
                 <td><b>${item.particulars}</b> ${bankTag}</td>
@@ -1443,12 +1444,16 @@ async function confirmBulkImport() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 transactions: itemsToImport,
-                logged_by: currentUser ? currentUser.name : "Admin Statement Importer"
+                logged_by: currentUser ? currentUser.name : "Admin Statement Importer",
+                pages_processed: currentReport ? currentReport.totalPages : 1,
+                review_count: currentReport ? currentReport.reviewCount : 0,
+                pdf_filename: selectedFileName || "statement.pdf"
             })
         });
         const data = await res.json();
         if (res.ok) {
-            alert(`✅ ${data.message}`);
+            const summaryMsg = `=========================================\nSTATEMENT IMPORT SUMMARY\n=========================================\nPDF Pages Processed:         ${data.pages_processed || 1}\nTransactions Detected:       ${data.total_detected || itemsToImport.length}\nNew Transactions Imported:   ${data.new_imported || 0}\nDuplicate Skipped:           ${data.duplicates_skipped || 0}\nReview Required:             ${data.review_required || 0}\nValidation Errors:           ${data.validation_errors || 0}\n=========================================`;
+            alert(summaryMsg);
             modal.classList.add("hidden");
             // Automatically reload transactions & re-render continuous bank ledger table on the same page!
             const txRes = await fetch("/api/transactions?role=admin");
@@ -1711,6 +1716,15 @@ function renderBankLedgerTable() {
         banner.classList.add("hidden");
     }
 
+    const exportBtn = document.getElementById("exportLedgerCsvBtn");
+    if (exportBtn) {
+        if (searchQuery) {
+            exportBtn.textContent = "📥 Download CSV";
+        } else {
+            exportBtn.textContent = "📥 Download All CSV";
+        }
+    }
+
     document.getElementById("ledgerOpeningBal").textContent = `PKR ${derivedOpeningBal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalDebit").textContent = `PKR ${totalDebit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     document.getElementById("ledgerTotalCredit").textContent = `PKR ${totalCredit.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
@@ -1732,14 +1746,31 @@ function strToFloat(val) {
     return isNaN(num) ? 0.0 : num;
 }
 
+function makeTxFingerprint(dateStr, descStr, debitVal, creditVal, refStr, balanceVal) {
+    const d = String(dateStr || "").trim();
+    const desc = String(descStr || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const deb = strToFloat(debitVal).toFixed(2);
+    const cred = strToFloat(creditVal).toFixed(2);
+    const bal = strToFloat(balanceVal).toFixed(2);
+    const ref = String(refStr || "").trim().toLowerCase();
+
+    if (ref && !ref.startsWith("ref_") && !ref.startsWith("auto-id") && !ref.startsWith("tx_")) {
+        return `${d}|${desc}|${deb}|${cred}|${ref}`;
+    } else {
+        return `${d}|${desc}|${deb}|${cred}|${bal}`;
+    }
+}
+
 function exportLedgerToCsv() {
     if (allLedgerTransactions.length === 0) {
         alert("No ledger statement data available to export.");
         return;
     }
 
-    let csvContent = "DATE,PARTICULARS,INST NO / REF,DEBIT,CREDIT,RUNNING BALANCE\n";
-    let curBal = DEFAULT_OPENING_BALANCE;
+    const searchQuery = (document.getElementById("ledgerSearchInput")?.value || "").toUpperCase().trim();
+    const selectedMonth = document.getElementById("ledgerMonthSelect")?.value || "all";
+    const dateFromStr = document.getElementById("ledgerDateFrom")?.value || "";
+    const dateToStr = document.getElementById("ledgerDateTo")?.value || "";
 
     const sorted = [...allLedgerTransactions].sort((a, b) => {
         const ta = getTimestampFromDateAndTime(a.date, a.time);
@@ -1747,7 +1778,15 @@ function exportLedgerToCsv() {
         return ta - tb;
     });
 
-    sorted.forEach(t => {
+    let derivedOpeningBal = DEFAULT_OPENING_BALANCE;
+    if (sorted.length > 0 && sorted[0].balance > 0) {
+        derivedOpeningBal = sorted[0].balance + sorted[0].debit - sorted[0].credit;
+    }
+
+    let currentBalance = derivedOpeningBal;
+    const matchingTxs = [];
+
+    sorted.forEach((t) => {
         const dVal = strToFloat(t.debit);
         const cVal = strToFloat(t.credit);
         const aVal = strToFloat(t.amount);
@@ -1757,20 +1796,82 @@ function exportLedgerToCsv() {
         const debitVal = dVal > 0 ? dVal : (!isCredit && aVal > 0 ? aVal : 0.0);
         const creditVal = cVal > 0 ? cVal : (isCredit && aVal > 0 ? aVal : 0.0);
 
-        if (bVal > 0) curBal = bVal;
-        else curBal = curBal - debitVal + creditVal;
+        if (bVal > 0) currentBalance = bVal;
+        else currentBalance = currentBalance - debitVal + creditVal;
 
-        const particulars = `"${(t.purpose || t.receiver_name || t.particulars || 'POS Sale').replace(/"/g, '""')}"`;
-        const ref = `"${(t.reference_number || t.id).replace(/"/g, '""')}"`;
+        t._calcDebit = debitVal;
+        t._calcCredit = creditVal;
+        t._calcBalance = currentBalance;
 
-        csvContent += `${t.date},${particulars},${ref},${debitVal},${creditVal},${curBal}\n`;
+        const monthHeaderStr = getMonthYearFullLabel(t.date);
+        const shortM = getMonthYearShortLabel(t.date);
+
+        let passesDateFilter = true;
+        if (selectedMonth !== "all" && shortM !== selectedMonth) passesDateFilter = false;
+        if (dateFromStr && t.date < dateFromStr) passesDateFilter = false;
+        if (dateToStr && t.date > dateToStr) passesDateFilter = false;
+
+        if (!passesDateFilter) return;
+
+        if (searchQuery) {
+            const rUpper = (t.receiver_name || "").toUpperCase();
+            const sUpper = (t.sender_name || "").toUpperCase();
+            const purpUpper = (t.purpose || t.particulars || "").toUpperCase();
+            const rawUpper = (t.raw_text || "").toUpperCase();
+            const refUpper = (t.reference_number || "").toUpperCase();
+
+            const fullHaystack = `${rUpper} ${sUpper} ${purpUpper} ${rawUpper} ${refUpper}`;
+
+            if (rUpper === searchQuery || sUpper === searchQuery) {
+                matchingTxs.push(t);
+            } else if (fullHaystack.includes(searchQuery)) {
+                matchingTxs.push(t);
+            }
+        } else {
+            matchingTxs.push(t);
+        }
     });
+
+    if (matchingTxs.length === 0) {
+        alert("No transaction records found matching the active filters.");
+        return;
+    }
+
+    let csvContent = "Date,Description,Person / Recipient Name,Transaction Type,Debit,Credit,Balance,Reference Number,Source Page\n";
+
+    matchingTxs.forEach(t => {
+        const dStr = t.date || "";
+        const descStr = `"${(t.particulars || t.purpose || "").replace(/"/g, '""')}"`;
+        const personStr = `"${(t.receiver_name || t.sender_name || "").replace(/"/g, '""')}"`;
+        const txTypeStr = `"${(t.transaction_type || "").replace(/"/g, '""')}"`;
+        const debStr = t._calcDebit > 0 ? t._calcDebit.toFixed(2) : "0.00";
+        const credStr = t._calcCredit > 0 ? t._calcCredit.toFixed(2) : "0.00";
+        const balStr = (t._calcBalance || 0).toFixed(2);
+        const refStr = `"${(t.reference_number || t.id || "").replace(/"/g, '""')}"`;
+        const pageStr = t.source_page || "1";
+
+        csvContent += `${dStr},${descStr},${personStr},${txTypeStr},${debStr},${credStr},${balStr},${refStr},${pageStr}\n`;
+    });
+
+    const sanitize = (s) => s.replace(/[^a-zA-Z0-9_\-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+    let namePart = searchQuery ? sanitize(searchQuery) : "All_Transactions";
+    
+    let datePart = "";
+    if (dateFromStr && dateToStr) {
+        datePart = `_${dateFromStr}_to_${dateToStr}`;
+    } else if (dateFromStr) {
+        datePart = `_from_${dateFromStr}`;
+    } else if (dateToStr) {
+        datePart = `_until_${dateToStr}`;
+    }
+
+    const filename = `${namePart}${datePart}.csv`;
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `SpendPulse_Bank_Ledger_Statement_${new Date().toISOString().slice(0,10)}.csv`;
+    link.download = filename;
     link.click();
 }
 

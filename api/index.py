@@ -254,6 +254,22 @@ def parse_sheet_row_to_dict(r):
         "content_hash": c_hash
     }
 
+def make_tx_fingerprint(t_date, t_desc, t_debit, t_credit, t_ref, t_bal):
+    d = str(t_date or "").strip()
+    desc = re.sub(r'[^a-z0-9]', '', str(t_desc or "").lower())
+    try: deb = f"{float(str(t_debit or 0).replace(',', '')):.2f}"
+    except ValueError: deb = "0.00"
+    try: cred = f"{float(str(t_credit or 0).replace(',', '')):.2f}"
+    except ValueError: cred = "0.00"
+    try: bal = f"{float(str(t_bal or 0).replace(',', '')):.2f}"
+    except ValueError: bal = "0.00"
+    ref = str(t_ref or "").strip().lower()
+
+    if ref and not ref.startswith("ref_") and not ref.startswith("auto-id") and not ref.startswith("tx_"):
+        return f"{d}|{desc}|{deb}|{cred}|{ref}"
+    else:
+        return f"{d}|{desc}|{deb}|{cred}|{bal}"
+
 def ocr_extract_fields(img_bytes):
     raw = os.environ.get("GOOGLE_CREDENTIALS", "")
     if not raw:
@@ -923,21 +939,21 @@ def app(environ, start_response):
             ws_tx, ws_users, sid = get_google_sheet_tabs()
             existing_rows = ws_tx.get_all_values()
 
-            existing_refs = set()
-            existing_hashes = set()
-            existing_signatures = set()
+            existing_fps = set()
 
             if len(existing_rows) > 1:
                 for r in existing_rows[1:]:
-                    if len(r) > 0 and r[0]:
-                        ref_val = str(r[0]).strip().lower()
-                        if not ref_val.startswith("ref_") and not ref_val.startswith("tx_"):
-                            existing_refs.add(ref_val)
+                    r_date = r[1] if len(r) > 1 else ""
+                    r_desc = r[9] if (len(r) > 9 and r[9]) else (r[7] if len(r) > 7 else "")
+                    r_deb = r[17] if len(r) > 17 else "0"
+                    r_cred = r[18] if len(r) > 18 else "0"
+                    r_ref = r[0] if len(r) > 0 else ""
+                    r_bal = r[20] if len(r) > 20 else "0"
+
+                    fp = make_tx_fingerprint(r_date, r_desc, r_deb, r_cred, r_ref, r_bal)
+                    existing_fps.add(fp)
                     if len(r) > 26 and r[26]:
-                        existing_hashes.add(str(r[26]).strip().lower())
-                    if len(r) >= 8:
-                        sig = f"{str(r[1]).strip()}_{str(r[3]).replace(',', '').strip()}_{str(r[7]).strip().lower()}"
-                        existing_signatures.add(sig)
+                        existing_fps.add(str(r[26]).strip())
 
             new_rows_to_append = []
             added_count = 0
@@ -972,18 +988,16 @@ def app(environ, start_response):
                 tx_type = str(item.get("transaction_type") or ("Credit" if credit_val > 0 else "Payment")).strip()
                 tx_id = f"tx_{uuid.uuid4().hex[:8]}"
 
-                content_hash = str(item.get("content_hash") or f"{item_date}_{amt_str}_{receiver[:50].lower()}_{source_page}").strip().lower()
+                item_fp = make_tx_fingerprint(
+                    item_date,
+                    purpose or receiver,
+                    debit_val,
+                    credit_val,
+                    ref_num,
+                    bal_val
+                )
 
-                # Deduplication Rules:
-                # If explicit non-generated reference matches, skip duplicate
-                # If content hash matches existing hash, skip duplicate
-                is_exact_duplicate = False
-                if ref_num and not ref_num.lower().startswith("ref_") and ref_num.lower() in existing_refs:
-                    is_exact_duplicate = True
-                elif content_hash in existing_hashes:
-                    is_exact_duplicate = True
-
-                if is_exact_duplicate:
+                if item_fp in existing_fps:
                     skipped_count += 1
                     continue
 
@@ -1014,22 +1028,25 @@ def app(environ, start_response):
                     statement_id,
                     pdf_filename,
                     "true" if is_possible_dup else "false",
-                    content_hash
+                    item_fp
                 ]
 
                 new_rows_to_append.append(row)
-                if ref_num and not ref_num.lower().startswith("ref_"):
-                    existing_refs.add(ref_num.lower())
-                existing_hashes.add(content_hash)
+                existing_fps.add(item_fp)
                 added_count += 1
 
             if new_rows_to_append:
                 ws_tx.append_rows(new_rows_to_append)
 
             status, headers, res = _json(200, {
-                "message": f"Successfully imported {added_count} statement transactions ({skipped_count} exact duplicates skipped).",
-                "added_count": added_count,
-                "skipped_count": skipped_count
+                "status": "success",
+                "message": f"Successfully imported {added_count} new transactions ({skipped_count} exact duplicates skipped).",
+                "pages_processed": data.get("pages_processed") or 1,
+                "total_detected": len(items),
+                "new_imported": added_count,
+                "duplicates_skipped": skipped_count,
+                "review_required": data.get("review_count") or 0,
+                "validation_errors": 0
             })
             start_response(status, headers)
             return res

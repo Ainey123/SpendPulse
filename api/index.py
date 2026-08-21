@@ -183,6 +183,36 @@ def get_google_sheet_tabs():
 
     return ws_tx, ws_users, sid
 
+def get_documents_tab(sh):
+    try:
+        ws_docs = sh.worksheet("statement_documents")
+    except Exception:
+        doc_headers = [
+            "document_id", "file_name", "bank_name", "upload_date", 
+            "statement_start_date", "statement_end_date", "page_count", 
+            "file_hash", "processing_status", "file_size", "transaction_count", "created_at"
+        ]
+        try:
+            ws_docs = sh.add_worksheet(title="statement_documents", rows=500, cols=len(doc_headers))
+            ws_docs.append_row(doc_headers)
+        except Exception:
+            ws_docs = sh.worksheet("statement_documents")
+    return ws_docs
+
+def get_comments_tab(sh):
+    try:
+        ws_comments = sh.worksheet("transaction_comments")
+    except Exception:
+        cmt_headers = [
+            "comment_id", "transaction_id", "comment_text", "created_at", "updated_at", "created_by"
+        ]
+        try:
+            ws_comments = sh.add_worksheet(title="transaction_comments", rows=1000, cols=len(cmt_headers))
+            ws_comments.append_row(cmt_headers)
+        except Exception:
+            ws_comments = sh.worksheet("transaction_comments")
+    return ws_comments
+
 def parse_sheet_row_to_dict(r):
     r_id = r[16] if len(r) > 16 and r[16] else f"tx_{uuid.uuid4().hex[:6]}"
     r_emp_id = r[15] if len(r) > 15 and r[15] else ""
@@ -1038,6 +1068,55 @@ def app(environ, start_response):
             if new_rows_to_append:
                 ws_tx.append_rows(new_rows_to_append)
 
+            # If document metadata list was sent, persist to statement_documents tab as well
+            try:
+                docs_payload = data.get("documents") or []
+                if not docs_payload and data.get("document_metadata"):
+                    docs_payload = [data.get("document_metadata")]
+                elif not docs_payload and data.get("pdf_filename"):
+                    docs_payload = [{
+                        "document_id": statement_id,
+                        "file_name": pdf_filename,
+                        "bank_name": data.get("bank_name") or "Universal Bank",
+                        "upload_date": datetime.now().strftime("%Y-%m-%d"),
+                        "statement_start_date": data.get("statement_start_date") or "",
+                        "statement_end_date": data.get("statement_end_date") or "",
+                        "page_count": data.get("pages_processed") or 1,
+                        "file_hash": data.get("file_hash") or "",
+                        "processing_status": "Completed",
+                        "file_size": data.get("file_size") or 0,
+                        "transaction_count": added_count,
+                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")
+                    }]
+                
+                if docs_payload:
+                    sh, _ = get_google_sheet_client()
+                    ws_docs = get_documents_tab(sh)
+                    existing_doc_rows = ws_docs.get_all_values()
+                    existing_doc_ids = {r[0]: idx for idx, r in enumerate(existing_doc_rows)}
+                    doc_rows_to_append = []
+                    for d_item in docs_payload:
+                        d_id = str(d_item.get("document_id") or statement_id)
+                        if d_id not in existing_doc_ids:
+                            doc_rows_to_append.append([
+                                d_id,
+                                str(d_item.get("file_name") or pdf_filename),
+                                str(d_item.get("bank_name") or "Universal Bank"),
+                                str(d_item.get("upload_date") or datetime.now().strftime("%Y-%m-%d")),
+                                str(d_item.get("statement_start_date") or ""),
+                                str(d_item.get("statement_end_date") or ""),
+                                str(d_item.get("page_count") or data.get("pages_processed") or 1),
+                                str(d_item.get("file_hash") or ""),
+                                str(d_item.get("processing_status") or "Completed"),
+                                str(d_item.get("file_size") or 0),
+                                str(d_item.get("transaction_count") or added_count),
+                                str(d_item.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M"))
+                            ])
+                    if doc_rows_to_append:
+                        ws_docs.append_rows(doc_rows_to_append)
+            except Exception as doc_err:
+                print("Statement document record error:", doc_err)
+
             status, headers, res = _json(200, {
                 "status": "success",
                 "message": f"Successfully imported {added_count} new transactions ({skipped_count} exact duplicates skipped).",
@@ -1054,6 +1133,215 @@ def app(environ, start_response):
             status, headers, res = _json(500, {"error": str(e)})
             start_response(status, headers)
             return res
+
+    # 8B. Get All Statement Documents Endpoint
+    if path == "/api/documents" and method == "GET":
+        try:
+            sh, sid = get_google_sheet_client()
+            ws_docs = get_documents_tab(sh)
+            rows = ws_docs.get_all_values()
+            docs = []
+            if len(rows) > 1:
+                for r in rows[1:]:
+                    if not r or len(r) == 0: continue
+                    docs.append({
+                        "document_id": r[0] if len(r) > 0 else "",
+                        "file_name": r[1] if len(r) > 1 else "",
+                        "bank_name": r[2] if len(r) > 2 else "",
+                        "upload_date": r[3] if len(r) > 3 else "",
+                        "statement_start_date": r[4] if len(r) > 4 else "",
+                        "statement_end_date": r[5] if len(r) > 5 else "",
+                        "page_count": int(r[6]) if len(r) > 6 and str(r[6]).isdigit() else 1,
+                        "file_hash": r[7] if len(r) > 7 else "",
+                        "processing_status": r[8] if len(r) > 8 else "Completed",
+                        "file_size": int(r[9]) if len(r) > 9 and str(r[9]).isdigit() else 0,
+                        "transaction_count": int(r[10]) if len(r) > 10 and str(r[10]).isdigit() else 0,
+                        "created_at": r[11] if len(r) > 11 else ""
+                    })
+            status, headers, res = _json(200, {"documents": docs})
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
+    # 8C. Save Statement Document Metadata Endpoint
+    if path == "/api/documents" and method == "POST":
+        try:
+            length = int(environ.get("CONTENT_LENGTH", "0"))
+            body = environ["wsgi.input"].read(length)
+            data = json.loads(body.decode("utf-8"))
+            
+            doc_list = data.get("documents") or ([data] if data.get("file_name") else [])
+            sh, sid = get_google_sheet_client()
+            ws_docs = get_documents_tab(sh)
+            existing_rows = ws_docs.get_all_values()
+            existing_ids = {r[0]: idx for idx, r in enumerate(existing_rows)}
+
+            added_docs = []
+            new_rows = []
+
+            for doc in doc_list:
+                doc_id = str(doc.get("document_id") or f"doc_{uuid.uuid4().hex[:8]}")
+                file_name = str(doc.get("file_name") or "statement.pdf")
+                bank_name = str(doc.get("bank_name") or "Universal Bank")
+                upload_date = str(doc.get("upload_date") or datetime.now().strftime("%Y-%m-%d"))
+                start_date = str(doc.get("statement_start_date") or "")
+                end_date = str(doc.get("statement_end_date") or "")
+                page_count = str(doc.get("page_count") or 1)
+                file_hash = str(doc.get("file_hash") or "")
+                status_str = str(doc.get("processing_status") or "Completed")
+                file_size = str(doc.get("file_size") or 0)
+                tx_count = str(doc.get("transaction_count") or 0)
+                created_at = str(doc.get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+                if doc_id not in existing_ids:
+                    row = [doc_id, file_name, bank_name, upload_date, start_date, end_date, page_count, file_hash, status_str, file_size, tx_count, created_at]
+                    new_rows.append(row)
+                    added_docs.append(doc_id)
+
+            if new_rows:
+                ws_docs.append_rows(new_rows)
+
+            status, headers, res = _json(200, {"message": f"Saved {len(added_docs)} documents", "added_ids": added_docs})
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
+    # 8D. Get Comments Endpoint (Transaction-specific comments)
+    if path == "/api/comments" and method == "GET":
+        try:
+            query_str = environ.get("QUERY_STRING", "")
+            params = dict(urllib.parse.parse_qsl(query_str))
+            target_tx_id = params.get("transaction_id", "").strip()
+
+            sh, sid = get_google_sheet_client()
+            ws_comments = get_comments_tab(sh)
+            rows = ws_comments.get_all_values()
+            comments = []
+            if len(rows) > 1:
+                for r in rows[1:]:
+                    if not r or len(r) == 0: continue
+                    c_id = r[0] if len(r) > 0 else ""
+                    tx_id = r[1] if len(r) > 1 else ""
+                    c_text = r[2] if len(r) > 2 else ""
+                    c_created = r[3] if len(r) > 3 else ""
+                    c_updated = r[4] if len(r) > 4 else ""
+                    c_by = r[5] if len(r) > 5 else "System Admin"
+
+                    if target_tx_id and tx_id != target_tx_id:
+                        continue
+
+                    comments.append({
+                        "comment_id": c_id,
+                        "transaction_id": tx_id,
+                        "comment_text": c_text,
+                        "created_at": c_created,
+                        "updated_at": c_updated,
+                        "created_by": c_by
+                    })
+            status, headers, res = _json(200, {"comments": comments})
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
+    # 8E. Add or Update Comment Endpoint
+    if path == "/api/comments" and method == "POST":
+        try:
+            length = int(environ.get("CONTENT_LENGTH", "0"))
+            body = environ["wsgi.input"].read(length)
+            data = json.loads(body.decode("utf-8"))
+
+            comment_id = str(data.get("comment_id") or "").strip()
+            transaction_id = str(data.get("transaction_id") or "").strip()
+            comment_text = str(data.get("comment_text") or "").strip()
+            created_by = str(data.get("created_by") or "System Admin").strip()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+            if not transaction_id or not comment_text:
+                status, headers, res = _json(400, {"error": "transaction_id and comment_text are required."})
+                start_response(status, headers)
+                return res
+
+            sh, sid = get_google_sheet_client()
+            ws_comments = get_comments_tab(sh)
+            rows = ws_comments.get_all_values()
+
+            updated = False
+            saved_id = comment_id
+            if comment_id and len(rows) > 1:
+                for idx, r in enumerate(rows[1:], start=2):
+                    if len(r) > 0 and r[0] == comment_id:
+                        ws_comments.update_cell(idx, 3, comment_text)
+                        ws_comments.update_cell(idx, 5, now_str)
+                        updated = True
+                        break
+
+            if not updated:
+                saved_id = f"cmt_{uuid.uuid4().hex[:8]}"
+                ws_comments.append_row([saved_id, transaction_id, comment_text, now_str, now_str, created_by])
+
+            status, headers, res = _json(200, {
+                "message": "Comment saved successfully",
+                "comment": {
+                    "comment_id": saved_id,
+                    "transaction_id": transaction_id,
+                    "comment_text": comment_text,
+                    "created_at": now_str,
+                    "updated_at": now_str,
+                    "created_by": created_by
+                }
+            })
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
+    # 8F. Delete Comment Endpoint
+    if path == "/api/delete-comment" and method == "POST":
+        try:
+            length = int(environ.get("CONTENT_LENGTH", "0"))
+            body = environ["wsgi.input"].read(length)
+            data = json.loads(body.decode("utf-8"))
+
+            target_id = str(data.get("comment_id") or "").strip()
+            if not target_id:
+                status, headers, res = _json(400, {"error": "comment_id is required."})
+                start_response(status, headers)
+                return res
+
+            sh, sid = get_google_sheet_client()
+            ws_comments = get_comments_tab(sh)
+            rows = ws_comments.get_all_values()
+
+            deleted = False
+            if len(rows) > 1:
+                for idx, r in enumerate(rows[1:], start=2):
+                    if len(r) > 0 and r[0] == target_id:
+                        ws_comments.delete_row(idx)
+                        deleted = True
+                        break
+
+            if deleted:
+                status, headers, res = _json(200, {"message": "Comment deleted successfully."})
+            else:
+                status, headers, res = _json(400, {"error": "Comment not found."})
+            start_response(status, headers)
+            return res
+        except Exception as e:
+            status, headers, res = _json(500, {"error": str(e)})
+            start_response(status, headers)
+            return res
+
 
     # 9. AI Statement Query & Database-First Financial Calculations Endpoint
     if path == "/api/query-statement" and method == "POST":
